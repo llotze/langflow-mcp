@@ -4,11 +4,11 @@
   "description": "MCP server for Langflow component discovery and flow building",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node src/server.ts",
-    "dev:mcp": "ts-node src/mcp-server.ts",
+    "dev": "ts-node src/api/server.ts",
+    "dev:mcp": "ts-node src/api/mcp-server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
-    "start:mcp": "node dist/mcp-server.js"
+    "start": "node dist/api/server.js",
+    "start:mcp": "node dist/api/mcp-server.js"
   },
   "keywords": [
     "langflow",

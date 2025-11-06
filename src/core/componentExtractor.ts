@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LangflowComponent, ComponentParameter } from './types';
+import { LangflowComponent, ComponentParameter } from '../types'; 
 
 export class ComponentExtractor {
   private componentsJsonPath: string;

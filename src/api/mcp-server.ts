@@ -4,10 +4,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { ComponentRegistry } from './registry.js';
-import { ComponentExtractor } from './componentExtractor.js';
-import { loadConfig } from './config.js';
-import { ComponentSearchQuery } from './types.js';
+import { ComponentRegistry } from '../core/registry.js';  
+import { ComponentExtractor } from '../core/componentExtractor.js'; 
+import { loadConfig } from '../core/config.js'; 
+import { ComponentSearchQuery } from '../types.js';  
 
 async function main() {
   // Same setup as REST API

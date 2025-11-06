@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { LangflowComponent, ComponentSearchQuery } from './types';
+import { LangflowComponent, ComponentSearchQuery } from '../types'; 
 
 export class ComponentRegistry {
   private db: Database.Database;

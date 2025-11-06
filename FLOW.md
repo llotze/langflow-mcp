@@ -5373,6 +5373,430 @@ curl -X POST http://localhost:3000/mcp/create_flow \
 
 ---
 
+---
+
+## 🔌 MCP Server Integration
+
+### 7. **mcp-server.ts** - Model Context Protocol Server
+
+**Purpose**: Implements the Model Context Protocol (MCP) to enable AI assistants like Claude Desktop to natively discover and interact with Langflow components.
+
+**Key Difference from REST API**: 
+- **REST API** (`server.ts`): HTTP-based, accessible via curl/browsers/scripts
+- **MCP Server** (`mcp-server.ts`): stdio-based JSON-RPC, native integration with AI assistants
+
+**Architecture**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Dual-Mode Architecture                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌──────────────────┐              ┌──────────────────┐     │
+│  │   REST API       │              │   MCP Server     │     │
+│  │  (server.ts)     │              │ (mcp-server.ts)  │     │
+│  │                  │              │                  │     │
+│  │  HTTP/HTTPS      │              │  stdio/JSON-RPC  │     │
+│  │  Port 3000       │              │  Claude Desktop  │     │
+│  └────────┬─────────┘              └────────┬─────────┘     │
+│           │                                 │               │
+│           └─────────┬───────────────────────┘               │
+│                     ↓                                       │
+│           ┌──────────────────┐                              │
+│           │   Shared Core    │                              │
+│           │   • registry     │                              │
+│           │   • extractor    │                              │
+│           │   • types        │                              │
+│           └──────────────────┘                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Class Structure**:
+
+```typescript
+// Main entry point
+async function main() {
+  // 1. Initialize shared components (same as REST API)
+  const config = loadConfig();
+  const registry = new ComponentRegistry(config.databasePath);
+  const extractor = new ComponentExtractor(
+    config.componentsJsonPath,
+    config.docsPath
+  );
+  
+  // 2. Suppress stdout logging (MCP requires clean JSON-RPC)
+  const originalLog = console.log;
+  console.log = console.error;  // Redirect to stderr
+  
+  // 3. Load components
+  const components = extractor.loadComponents();
+  for (const component of components) {
+    await registry.registerComponent(component);
+  }
+  
+  console.log = originalLog;  // Restore
+  
+  // 4. Create MCP server
+  const server = new Server(
+    {
+      name: 'langflow-mcp',
+      version: '1.0.0',
+    },
+    {
+      capabilities: {
+        tools: {},  // Expose tools to AI
+      },
+    }
+  );
+  
+  // 5. Register tools (MCP's version of API endpoints)
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [...]  // Tool definitions
+  }));
+  
+  // 6. Handle tool calls
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    // Route tool calls to registry methods
+  });
+  
+  // 7. Connect via stdio transport
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  
+  console.error('Langflow MCP server running on stdio');
+}
+```
+
+**MCP Tools Exposed**:
+
+The MCP server exposes 3 tools that Claude can call:
+
+1. **search_components**
+   ```typescript
+   {
+     name: 'search_components',
+     description: 'Search for Langflow components by keyword, category, or filters',
+     inputSchema: {
+       type: 'object',
+       properties: {
+         query: { type: 'string' },
+         category: { type: 'string' },
+         limit: { type: 'number' },
+         tool_mode: { type: 'boolean' },
+         legacy: { type: 'boolean' }
+       }
+     }
+   }
+   ```
+
+2. **get_component**
+   ```typescript
+   {
+     name: 'get_component',
+     description: 'Get detailed information about a specific component',
+     inputSchema: {
+       type: 'object',
+       properties: {
+         name: { type: 'string', description: 'Component name' }
+       },
+       required: ['name']
+     }
+   }
+   ```
+
+3. **list_categories**
+   ```typescript
+   {
+     name: 'list_categories',
+     description: 'List all available Langflow component categories',
+     inputSchema: {
+       type: 'object',
+       properties: {}
+     }
+   }
+   ```
+
+**Tool Call Handler**:
+
+```typescript
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+  
+  switch (name) {
+    case 'search_components': {
+      // Type-safe query construction
+      const searchQuery: ComponentSearchQuery = {
+        query: args?.query as string | undefined,
+        category: args?.category as string | undefined,
+        limit: args?.limit as number | undefined,
+        tool_mode: args?.tool_mode as boolean | undefined,
+        legacy: args?.legacy as boolean | undefined,
+      };
+      
+      // Reuse registry method (shared with REST API)
+      const results = registry.searchComponents(searchQuery);
+      
+      // Return in MCP format
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(results, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case 'get_component': {
+      // Validate input
+      if (!args?.name || typeof args.name !== 'string') {
+        throw new Error('Component name is required');
+      }
+      
+      // Query database
+      const component = registry.getComponent(args.name as string);
+      if (!component) {
+        throw new Error(`Component '${args.name}' not found`);
+      }
+      
+      // Return component data
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(component, null, 2),
+          },
+        ],
+      };
+    }
+    
+    case 'list_categories': {
+      const categories = registry.getCategories();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(categories, null, 2),
+          },
+        ],s
+      };
+    }
+    
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+});
+```
+
+**Critical MCP Requirements**:
+
+1. **Clean stdout**: Only JSON-RPC messages allowed on stdout
+   ```typescript
+   // Redirect all logs to stderr
+   console.log = console.error;
+   
+   // Or conditionally suppress
+   if (process.env.MCP_MODE !== 'stdio') {
+     console.log('Normal logging');
+   }
+   ```
+
+2. **JSON-RPC format**: All responses must follow MCP protocol
+   ```typescript
+   // Correct MCP response
+   return {
+     content: [
+       {
+         type: 'text',
+         text: JSON.stringify(data)
+       }
+     ]
+   };
+   
+   // NOT a plain object like REST API
+   ```
+
+3. **stdio transport**: Communication via stdin/stdout, not HTTP
+   ```typescript
+   const transport = new StdioServerTransport();
+   await server.connect(transport);
+   ```
+
+**Configuration for Claude Desktop**:
+
+```json
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "langflow": {
+      "command": "node",
+      "args": [
+        "C:\\path\\to\\langflow-mcp\\dist\\mcp-server.js"
+      ],
+      "env": {
+        "MCP_MODE": "stdio"
+      }
+    }
+  }
+}
+```
+
+**Testing MCP Server**:
+
+```bash
+# Manual test with echo
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node dist/mcp-server.js
+
+# Expected output (JSON-RPC response with tool list)
+{
+  "result": {
+    "tools": [
+      {"name": "search_components", ...},
+      {"name": "get_component", ...},
+      {"name": "list_categories", ...}
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}
+```
+
+**Usage in Claude Desktop**:
+
+Once connected, users can ask Claude natural language questions:
+
+```
+User: "What Langflow components are available for RAG?"
+
+Claude: [Automatically calls search_components tool]
+        
+        I found several RAG-related components:
+        1. AstraDB - Vector database
+        2. Chroma - Vector store
+        3. OpenAIEmbeddings - Generate embeddings
+        ...
+```
+
+**Comparison with REST API**:
+
+| Aspect | REST API (server.ts) | MCP Server (mcp-server.ts) |
+|--------|---------------------|----------------------------|
+| **Protocol** | HTTP/HTTPS | JSON-RPC over stdio |
+| **Transport** | TCP sockets (port 3000) | stdin/stdout |
+| **Client** | Any HTTP client | AI assistants (Claude, etc.) |
+| **Discovery** | Manual (API docs) | Automatic (tools/list) |
+| **Testing** | curl, Postman, browser | echo, Claude Desktop |
+| **Output** | Any format | JSON-RPC only on stdout |
+| **Logging** | console.log to stdout | console.error to stderr |
+| **Use Case** | Scripts, UIs, debugging | Native AI integration |
+
+**When to Use Each**:
+
+- **Use REST API** (`npm run dev`):
+  - Testing with curl/Postman
+  - Building web UIs
+  - Automation scripts
+  - Debugging workflows
+  - Public API access
+
+- **Use MCP Server** (`npm run dev:mcp`):
+  - Claude Desktop integration
+  - AI-native component discovery
+  - Natural language queries
+  - Conversational workflow building
+
+**Shared Core Logic**:
+
+Both servers use identical underlying logic:
+
+```
+REST API Request                    MCP Tool Call
+       ↓                                  ↓
+tools.searchComponents()        server.CallToolRequestSchema
+       ↓                                  ↓
+registry.searchComponents()  ← SAME METHOD → registry.searchComponents()
+       ↓                                  ↓
+   Database                            Database
+       ↓                                  ↓
+JSON over HTTP                    JSON-RPC over stdio
+```
+
+**Benefits of Dual-Mode Architecture**:
+
+1. **Flexibility**: Choose appropriate interface for use case
+2. **Code Reuse**: 85% shared logic between both
+3. **Testing**: Use REST API for quick testing
+4. **Production**: Use MCP for AI integration
+5. **Future-Proof**: Easy to add more interfaces (GraphQL, gRPC, etc.)
+
+**When to Modify**:
+
+- Adding new tools: Update both REST endpoints AND MCP tool handlers
+- Changing data format: Update shared registry/extractor, both servers adapt
+- Adding validation: Implement once in registry, both servers benefit
+- New features: Add to shared core, expose via both interfaces
+
+**Error Handling in MCP**:
+
+```typescript
+try {
+  // Tool logic
+  return {
+    content: [{ type: 'text', text: JSON.stringify(result) }]
+  };
+} catch (error) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  return {
+    content: [
+      {
+        type: 'text',
+        text: `Error: ${errorMessage}`,
+      },
+    ],
+    isError: true,
+  };
+}
+```
+
+**Dependencies**:
+
+```json
+{
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",  // MCP protocol implementation
+    "better-sqlite3": "^11.5.0",            // Database (shared)
+    "express": "^5.1.0",                    // REST API only
+    // ... other shared dependencies
+  }
+}
+```
+
+**File Size Comparison**:
+
+- `server.ts` (REST API): ~200 lines
+- `mcp-server.ts` (MCP): ~180 lines
+- Shared core (`registry.ts`, `extractor.ts`, `types.ts`): ~1500 lines
+
+**Performance**:
+
+- **Startup**: Same (loads 334 components into database)
+- **Query Speed**: Identical (same database queries)
+- **Memory**: Similar (both keep registry in memory)
+- **Overhead**: MCP slightly less (no HTTP parsing)
+
+**Summary**:
+
+The MCP server (`mcp-server.ts`) enables native AI integration by:
+1. Implementing Model Context Protocol via stdio
+2. Exposing 3 tools for component discovery
+3. Reusing all core logic from REST API
+4. Maintaining clean JSON-RPC output
+5. Enabling conversational workflow building
+
+This dual-mode architecture provides the best of both worlds: easy testing with REST API and powerful AI integration with MCP.
+
+---
+
 **Last Updated:** November 6, 2025  
 **Version:** 1.0.0  
 **Maintained by:** Langflow MCP Team
