@@ -4,10 +4,11 @@
   "description": "MCP server for Langflow component discovery and flow building",
   "main": "dist/server.js",
   "scripts": {
+    "dev": "ts-node src/server.ts",
+    "dev:mcp": "ts-node src/mcp-server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "ts-node src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start:mcp": "node dist/mcp-server.js"
   },
   "keywords": [
     "langflow",
@@ -26,6 +27,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.21.0",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.1",
     "express": "^5.1.0"

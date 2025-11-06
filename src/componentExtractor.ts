@@ -63,7 +63,10 @@ export class ComponentExtractor {
       }
     });
 
-    console.log(`Parsed ${components.length} components from ${Object.keys(componentsData).length} categories`);
+    // Silent in MCP mode - no console.log allowed
+    if (process.env.MCP_MODE !== 'stdio') {
+      console.log(`Parsed ${components.length} components from ${Object.keys(componentsData).length} categories`);
+    }
     return components;
   }
 
