@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LangflowComponent, ComponentParameter } from '../types.js'; 
+import { LangflowComponent, ComponentParameter } from '../types.js';
 
 export class ComponentExtractor {
   private componentsJsonPath: string;
@@ -63,10 +63,6 @@ export class ComponentExtractor {
       }
     });
 
-    // Silent in MCP mode - no console.log allowed
-    if (process.env.MCP_MODE !== 'stdio') {
-      console.log(`Parsed ${components.length} components from ${Object.keys(componentsData).length} categories`);
-    }
     return components;
   }
 

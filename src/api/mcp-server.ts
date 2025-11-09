@@ -18,19 +18,17 @@ async function main() {
     config.docsPath
   );
 
-  // IMPORTANT: Suppress all stdout logging from extractor
-  // MCP requires ONLY JSON-RPC on stdout
-  const originalLog = console.log;
-  console.log = console.error; // Redirect logs to stderr
-
-  // Load components (reusing same logic!)
+  // Load components
   const components = extractor.loadComponents();
+  
+  // Register all components first
   for (const component of components) {
     await registry.registerComponent(component);
   }
-
-  // Restore console.log (though we shouldn't use it)
-  console.log = originalLog;
+  
+  // THEN log after registration is complete
+  const categories = registry.getCategories();
+  console.error(`✅ Loaded ${components.length} components across ${categories.length} categories`);
 
   // Create MCP server
   const server = new Server(
@@ -112,12 +110,31 @@ async function main() {
 
         case 'get_component': {
           if (!args?.name || typeof args.name !== 'string') {
-            throw new Error('Component name is required');
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ error: 'Component name is required' }, null, 2),
+                },
+              ],
+              isError: true,
+            };
           }
           
           const component = registry.getComponent(args.name as string);
           if (!component) {
-            throw new Error(`Component '${args.name}' not found`);
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ 
+                    error: `Component '${args.name}' not found`,
+                    suggestion: 'Use search_components to find available components'
+                  }, null, 2),
+                },
+              ],
+              isError: true,
+            };
           }
           
           return {
@@ -143,7 +160,18 @@ async function main() {
         }
 
         default:
-          throw new Error(`Unknown tool: ${name}`);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ 
+                  error: `Unknown tool: ${name}`,
+                  available_tools: ['search_components', 'get_component', 'list_categories']
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -151,7 +179,10 @@ async function main() {
         content: [
           {
             type: 'text',
-            text: `Error: ${errorMessage}`,
+            text: JSON.stringify({ 
+              error: errorMessage,
+              stack: error instanceof Error ? error.stack : undefined
+            }, null, 2),
           },
         ],
         isError: true,

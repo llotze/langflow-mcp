@@ -37,6 +37,71 @@ The **Langflow MCP Server** is a REST API that provides programmatic access to L
 - **HTTP Client**: Axios
 - **Development**: ts-node, TypeScript 5.9
 
+### Module System: ES Modules (ESM)
+
+This project uses **ES Modules (ESM)** instead of CommonJS:
+
+**Why ESM?**
+- The MCP SDK (`@modelcontextprotocol/sdk`) is ESM-only
+- Modern JavaScript standard (ES2015+)
+- Better tree-shaking and optimization
+- Required for browser + Node.js compatibility
+
+**ESM Requirements:**
+
+1. **`package.json` must include:**
+```json
+{
+  "type": "module"
+}
+```
+
+2. **Import statements require `.js` extensions:**
+```typescript
+// ✅ Correct (ESM)
+import { ComponentRegistry } from './core/registry.js';
+
+// ❌ Wrong (would work in CommonJS, not ESM)
+import { ComponentRegistry } from './core/registry';
+```
+
+3. **`__dirname` doesn't exist in ESM:**
+```typescript
+// ❌ CommonJS way (doesn't work in ESM)
+const projectRoot = path.join(__dirname, '..', '..');
+
+// ✅ ESM way (required)
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.join(__dirname, '..', '..');
+```
+
+4. **TypeScript compilation config:**
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "module": "ES2020",           // ← Compile to ESM
+    "moduleResolution": "bundler", // ← Handle .js extensions
+    "type": "module"              // ← Tell tsc we're using ESM
+  }
+}
+```
+
+**Development vs Production:**
+
+| Mode | Command | What Runs |
+|------|---------|-----------|
+| **Dev** | `npm run dev` | `tsx` runs TypeScript directly (no build) |
+| **Prod** | `npm run build && npm start` | `tsc` compiles to ESM, Node runs `.js` files |
+
+**Why `tsx` in development?**
+- Handles ESM/CommonJS interop automatically
+- No build step needed
+- Faster iteration
+- Still respects ESM rules
+
 ### Key Metrics
 
 - **334 Components** loaded from Langflow
@@ -105,28 +170,52 @@ The **Langflow MCP Server** is a REST API that provides programmatic access to L
 
 ```
 langflow-mcp/
-├── src/
-│   ├── server.ts              # Entry point, Express setup, startup logic
-│   ├── config.ts              # Configuration loader (.env + defaults)
-│   ├── types.ts               # TypeScript interfaces & type definitions
-│   ├── componentExtractor.ts # Parses components.json into structured data
-│   ├── registry.ts            # Database operations (CRUD + search)
-│   └── tools.ts               # API endpoint handlers (business logic)
+├── src/                       # TypeScript source (ESM)
+│   ├── api/                   # API servers
+│   │   ├── server.ts          # REST API (Express)
+│   │   └── mcp-server.ts      # MCP server (stdio)
+│   ├── core/                  # Business logic
+│   │   ├── config.ts          # Configuration (uses import.meta.url)
+│   │   ├── registry.ts        # Database operations
+│   │   └── componentExtractor.ts # JSON parser
+│   ├── tools.ts               # API handlers
+│   └── types.ts               # TypeScript types
 │
-├── data/
-│   ├── components.json        # 334 Langflow components (source of truth)
-│   ├── langflow.db            # SQLite database (auto-generated)
-│   ├── templates/             # Flow templates (JSON files)
-│   │   └── Vector Store RAG.json
-│   └── docs/                  # Component documentation (MDX files)
+├── dist/                      # Compiled JavaScript (ESM)
+│   ├── api/
+│   │   ├── server.js          # ← Node.js runs this
+│   │   ├── server.js.map      # Source map for debugging
+│   │   ├── server.d.ts        # Type declarations
+│   │   └── mcp-server.js
+│   └── core/
+│       ├── config.js
+│       ├── registry.js
+│       └── componentExtractor.js
 │
-├── package.json               # Dependencies & scripts
-├── tsconfig.json              # TypeScript configuration
-├── .env.example               # Environment variable template
-└── README.md                  # Project documentation
+├── data/                      # Application data
+│   ├── components.json        # 334 Langflow components
+│   ├── langflow.db            # SQLite database
+│   ├── docs/                  # Component documentation
+│   └── templates/             # Flow templates
+│
+├── scripts/                   # Utility scripts
+│   └── test-mcp.ts            # MCP testing script
+│
+├── package.json               # "type": "module" for ESM
+├── tsconfig.json              # "module": "ES2020"
+└── README.md
 ```
 
----
+**Key Differences from CommonJS Projects:**
+
+| File | CommonJS | ESM |
+|------|----------|-----|
+| **package.json** | (no type field) | `"type": "module"` |
+| **Imports** | `require('./file')` | `import x from './file.js'` |
+| **Exports** | `module.exports = x` | `export default x` |
+| **__dirname** | Available globally | Must use `import.meta.url` |
+| **File extensions** | Optional | **Required** (`.js`) |
+
 
 ## 🔧 Core Components
 
@@ -5796,6 +5885,93 @@ The MCP server (`mcp-server.ts`) enables native AI integration by:
 This dual-mode architecture provides the best of both worlds: easy testing with REST API and powerful AI integration with MCP.
 
 ---
+
+## 🏗️ Build Process (ESM)
+
+### Development Workflow
+
+```bash
+# Run TypeScript directly (no build)
+npm run dev        # REST API
+npm run dev:mcp    # MCP server
+
+# tsx handles ESM automatically
+```
+
+**What `tsx` does:**
+1. Reads TypeScript files
+2. Transpiles to ESM in memory
+3. Executes immediately
+4. No `dist/` folder created
+
+### Production Build
+
+```bash
+# Compile TypeScript to JavaScript
+npm run build
+
+# Output structure:
+dist/
+├── api/
+│   ├── server.js        # ESM module
+│   ├── server.js.map    # Source map
+│   ├── server.d.ts      # Type declarations
+│   └── mcp-server.js
+└── core/
+    ├── config.js
+    ├── registry.js
+    └── componentExtractor.js
+```
+
+**What `tsc` does:**
+1. Reads `tsconfig.json`
+2. Compiles `.ts` → `.js` (ESM format)
+3. Generates `.d.ts` (type declarations)
+4. Generates `.js.map` (source maps)
+5. Outputs to `dist/`
+
+### Running Production Build
+
+```bash
+# Run compiled JavaScript
+npm start         # REST API: node dist/api/server.js
+npm run start:mcp # MCP server: node dist/api/mcp-server.js
+```
+
+**Node.js execution:**
+1. Reads `package.json` → sees `"type": "module"`
+2. Treats all `.js` files as ESM
+3. Uses native `import`/`export`
+4. Resolves `.js` extensions in imports
+
+### Build Artifacts Explained
+
+```typescript
+// Source: src/core/config.ts
+export function loadConfig(): Config { ... }
+
+// Compiled: dist/core/config.js (ESM)
+export function loadConfig() { ... }
+
+// Type declaration: dist/core/config.d.ts
+export declare function loadConfig(): Config;
+
+// Source map: dist/core/config.js.map
+// Maps line 45 in config.js → line 67 in src/core/config.ts
+```
+
+### Testing
+
+```bash
+# Build and test MCP server
+npm run test:mcp
+
+# This runs:
+# 1. npm run build (compile TypeScript)
+# 2. tsx scripts/test-mcp.ts (run tests)
+# 3. Spawns: node dist/api/mcp-server.js (test against built server)
+```
+
 
 **Last Updated:** November 6, 2025  
 **Version:** 1.0.0  
