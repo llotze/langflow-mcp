@@ -1,8 +1,8 @@
 import express, { Express, Request, Response } from 'express';
-import { loadConfig, ensureDirectories } from '../core/config'; 
-import { ComponentExtractor } from '../core/componentExtractor'; 
-import { ComponentRegistry } from '../core/registry';
-import { MCPTools } from '../tools';
+import { loadConfig, ensureDirectories } from '../core/config.js'; 
+import { ComponentExtractor } from '../core/componentExtractor.js'; 
+import { ComponentRegistry } from '../core/registry.js';
+import { MCPTools } from '../tools.js';
 
 async function main() {
   console.log('Starting Langflow MCP Server...');

@@ -2,10 +2,11 @@
   "name": "langflow-mcp",
   "version": "1.0.0",
   "description": "MCP server for Langflow component discovery and flow building",
-  "main": "dist/server.js",
+  "type": "module",
+  "main": "dist/api/server.js",
   "scripts": {
-    "dev": "ts-node src/api/server.ts",
-    "dev:mcp": "ts-node src/api/mcp-server.ts",
+    "dev": "tsx src/api/server.ts",
+    "dev:mcp": "tsx src/api/mcp-server.ts",
     "build": "tsc",
     "start": "node dist/api/server.js",
     "start:mcp": "node dist/api/mcp-server.js"
@@ -16,14 +17,14 @@
     "ai",
     "automation"
   ],
-  "author": "",
+  "author": "Lucas Lotze",
   "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "dependencies": {

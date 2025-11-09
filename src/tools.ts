@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { ComponentRegistry } from './core/registry'; 
-import { ComponentSearchQuery, MCPToolResponse, FlowDiffOperation, LangflowFlow, FlowNode, FlowEdge } from './types';
+import { ComponentRegistry } from './core/registry.js'; 
+import { ComponentSearchQuery, MCPToolResponse, FlowDiffOperation, LangflowFlow, FlowNode, FlowEdge } from './types.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
