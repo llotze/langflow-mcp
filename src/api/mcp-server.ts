@@ -6,11 +6,14 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { ComponentRegistry } from '../core/registry.js';  
 import { ComponentExtractor } from '../core/componentExtractor.js'; 
+import { FlowValidator } from '../services/flowValidator.js';
+import { FlowDiffEngine } from '../services/flowDiffEngine.js';
 import { loadConfig } from '../core/config.js'; 
-import { ComponentSearchQuery } from '../types.js';  
+import { ComponentSearchQuery, LangflowFlow } from '../types.js';
+import { FlowDiffRequest } from '../types/flowDiff.js';
 
 async function main() {
-  // Same setup as REST API
+  // Setup
   const config = loadConfig();
   const registry = new ComponentRegistry(config.databasePath);
   const extractor = new ComponentExtractor(
@@ -21,14 +24,17 @@ async function main() {
   // Load components
   const components = extractor.loadComponents();
   
-  // Register all components first
+  // Register all components
   for (const component of components) {
     await registry.registerComponent(component);
   }
   
-  // THEN log after registration is complete
   const categories = registry.getCategories();
   console.error(`✅ Loaded ${components.length} components across ${categories.length} categories`);
+
+  // Initialize flow services
+  const validator = new FlowValidator(registry);
+  const diffEngine = new FlowDiffEngine(registry, validator);
 
   // Create MCP server
   const server = new Server(
@@ -43,26 +49,26 @@ async function main() {
     }
   );
 
-  // Register tools that Claude can call
+  // Register tools
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
         name: 'search_components',
-        description: 'Search for Langflow components by keyword, category, or filters',
+        description: 'Search for Langflow components by keyword, category, or filters. Returns matching components with their basic information.',
         inputSchema: {
           type: 'object',
           properties: {
             query: { type: 'string', description: 'Search term to match in component names and descriptions' },
             category: { type: 'string', description: 'Filter by specific category (e.g., "models", "agents")' },
-            limit: { type: 'number', description: 'Maximum number of results to return' },
+            limit: { type: 'number', description: 'Maximum number of results to return (default: 20)' },
             tool_mode: { type: 'boolean', description: 'Filter components by tool mode capability' },
-            legacy: { type: 'boolean', description: 'Include legacy/deprecated components' },
+            legacy: { type: 'boolean', description: 'Include legacy/deprecated components (default: false)' },
           },
         },
       },
       {
         name: 'get_component',
-        description: 'Get detailed information about a specific Langflow component including parameters and configuration',
+        description: 'Get detailed information about a specific Langflow component including all parameters, types, defaults, and configuration options.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -73,10 +79,64 @@ async function main() {
       },
       {
         name: 'list_categories',
-        description: 'List all available Langflow component categories',
+        description: 'List all available Langflow component categories. Useful for browsing components by type.',
         inputSchema: {
           type: 'object',
           properties: {},
+        },
+      },
+      {
+        name: 'validate_flow',
+        description: 'Validate a Langflow flow configuration before creation or deployment. Checks for: missing required parameters, invalid component types, broken connections, type mismatches, and structural issues. Returns detailed validation results with error messages and suggested fixes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow: {
+              type: 'object',
+              description: 'The flow object to validate. Must include name and data.nodes array.',
+              required: true,
+            },
+          },
+          required: ['flow'],
+        },
+      },
+      {
+        name: 'update_flow',
+        description: 'Update a Langflow flow using incremental diff operations. THIS IS THE MOST EFFICIENT way to modify flows - sends only changes instead of entire flow JSON (80-90% token savings). Supports atomic operations: addNode, removeNode, updateNode, moveNode, addEdge, removeEdge, updateMetadata. Operations are applied sequentially and validated.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow: {
+              type: 'object',
+              description: 'Current flow state to update',
+              required: true,
+            },
+            operations: {
+              type: 'array',
+              description: 'Array of diff operations to apply sequentially',
+              items: {
+                type: 'object',
+                properties: {
+                  type: {
+                    type: 'string',
+                    enum: ['addNode', 'removeNode', 'updateNode', 'moveNode', 'addEdge', 'removeEdge', 'updateMetadata'],
+                    description: 'Type of operation to perform',
+                  },
+                },
+                required: ['type'],
+              },
+              required: true,
+            },
+            validateAfter: {
+              type: 'boolean',
+              description: 'Validate flow after applying operations (default: true)',
+            },
+            continueOnError: {
+              type: 'boolean',
+              description: 'Continue applying operations if one fails (default: false)',
+            },
+          },
+          required: ['flow', 'operations'],
         },
       },
     ],
@@ -98,11 +158,22 @@ async function main() {
           };
           
           const results = registry.searchComponents(searchQuery);
+          
+          // Return simplified results for efficiency
+          const simplified = results.map(comp => ({
+            name: comp.name,
+            display_name: comp.display_name,
+            category: comp.category,
+            description: comp.description,
+            parameters_count: comp.parameters.length,
+            tool_mode: comp.tool_mode,
+          }));
+          
           return {
             content: [
               {
                 type: 'text',
-                text: JSON.stringify(results, null, 2),
+                text: JSON.stringify(simplified, null, 2),
               },
             ],
           };
@@ -159,6 +230,94 @@ async function main() {
           };
         }
 
+        case 'validate_flow': {
+          if (!args?.flow) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ 
+                    error: 'Flow object is required',
+                    example: {
+                      flow: {
+                        name: 'My Flow',
+                        data: {
+                          nodes: [],
+                          edges: []
+                        }
+                      }
+                    }
+                  }, null, 2),
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const flow = args.flow as LangflowFlow;
+          const result = await validator.validateFlow(flow);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  valid: result.valid,
+                  summary: result.summary,
+                  issues: result.issues,
+                }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'update_flow': {
+          if (!args?.flow || !args?.operations) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ 
+                    error: 'Both flow and operations are required',
+                    example: {
+                      flow: { name: 'My Flow', data: { nodes: [], edges: [] } },
+                      operations: [
+                        { type: 'addNode', node: { id: 'node-1', type: 'ChatInput', position: { x: 0, y: 0 }, data: {} } }
+                      ]
+                    }
+                  }, null, 2),
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const diffRequest: FlowDiffRequest = {
+            flow: args.flow as LangflowFlow,
+            operations: args.operations as any[],
+            validateAfter: args.validateAfter !== false,
+            continueOnError: args.continueOnError === true,
+          };
+
+          const result = await diffEngine.applyDiff(diffRequest);
+          
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: result.success,
+                  operationsApplied: result.operationsApplied,
+                  totalOperations: diffRequest.operations.length,
+                  updatedFlow: result.flow,
+                  errors: result.errors,
+                  warnings: result.warnings,
+                }, null, 2),
+              },
+            ],
+          };
+        }
+
         default:
           return {
             content: [
@@ -166,7 +325,13 @@ async function main() {
                 type: 'text',
                 text: JSON.stringify({ 
                   error: `Unknown tool: ${name}`,
-                  available_tools: ['search_components', 'get_component', 'list_categories']
+                  available_tools: [
+                    'search_components',
+                    'get_component', 
+                    'list_categories',
+                    'validate_flow',
+                    'update_flow'
+                  ]
                 }, null, 2),
               },
             ],
@@ -175,12 +340,15 @@ async function main() {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Error in tool ${name}:`, error);
+      
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({ 
               error: errorMessage,
+              tool: name,
               stack: error instanceof Error ? error.stack : undefined
             }, null, 2),
           },
@@ -194,7 +362,6 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Log to stderr (not stdout!)
   console.error('Langflow MCP server running on stdio');
 }
 

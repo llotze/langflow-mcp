@@ -19,18 +19,20 @@ export interface LangflowComponent {
 
 export interface ComponentParameter {
   name: string;
-  display_name: string;
+  display_name?: string;
   type: string;
   required: boolean;
   default?: any;
   description?: string;
-  options?: string[] | any[];
+  options?: any[];
   placeholder?: string;
   password?: boolean;
   multiline?: boolean;
   file_types?: string[];
   input_types?: string[];
   load_from_db?: boolean;
+  advanced?: boolean;  
+  show?: boolean;     
 }
 
 export interface LangflowFlow {
@@ -52,6 +54,8 @@ export interface FlowNode {
     type: string;
     node: {
       template: Record<string, any>;
+      display_name?: string;  
+      description?: string;   
       [key: string]: any;
     };
   };

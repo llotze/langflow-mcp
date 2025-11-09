@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/api/server.js",
     "start:mcp": "node dist/api/mcp-server.js",
-    "test:mcp": "npm run build && tsx scripts/test-mcp.ts"
+    "test:mcp": "npm run build && tsx scripts/test-mcp.ts",
+    "test:flow-building": "tsx scripts/test-flow-building.ts"
   },
   "keywords": [
     "langflow",

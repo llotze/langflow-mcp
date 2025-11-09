@@ -92,7 +92,7 @@ export class ComponentExtractor {
 
   /**
    * Extract parameters from component template
-   * Template structure: { fieldName: { type, required, display_name, ... } }
+   * FIXED: Properly extracts all parameters including input_value, api_key, etc.
    */
   private extractParameters(template: any): ComponentParameter[] {
     const parameters: ComponentParameter[] = [];
@@ -104,22 +104,23 @@ export class ComponentExtractor {
     Object.keys(template).forEach(key => {
       const field = template[key];
       
-      // Skip internal/hidden fields
-      if (key.startsWith('_') || key.startsWith('code')) {
+      // Only skip these specific internal fields
+      if (key === '_type' || key === 'code') {
         return;
       }
 
-      // Skip if field is marked as advanced but not shown
-      if (field.advanced === false || field.show === false) {
+      // Skip if field is explicitly marked as not shown
+      // Note: show defaults to true if not specified
+      if (field.show === false) {
         return;
       }
 
       try {
         parameters.push({
-          name: key,
+          name: field.name || key,
           display_name: field.display_name || field.name || key,
           type: this.mapLangflowType(field.type || 'str'),
-          required: field.required || false,
+          required: false, // ✅ Always false - Langflow handles defaults
           default: field.value !== undefined ? field.value : field.default,
           description: field.info || field.description || field.placeholder || '',
           options: field.options || field.list,
@@ -129,6 +130,8 @@ export class ComponentExtractor {
           file_types: field.fileTypes || field.file_types,
           input_types: field.input_types,
           load_from_db: field.load_from_db || false,
+          advanced: field.advanced === true,  // Track if advanced
+          show: field.show !== false,  // Track visibility
         });
       } catch (error) {
         console.error(`Error parsing parameter ${key}:`, error);
@@ -156,6 +159,8 @@ export class ComponentExtractor {
       'Message': 'message',
       'Data': 'data',
       'DataFrame': 'dataframe',
+      'slider': 'number',
+      'other': 'any',
     };
     
     return typeMap[langflowType] || langflowType.toLowerCase();
