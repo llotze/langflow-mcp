@@ -11,7 +11,8 @@
     "start": "node dist/api/server.js",
     "start:mcp": "node dist/api/mcp-server.js",
     "test:mcp": "npm run build && tsx scripts/test-mcp.ts",
-    "test:flow-building": "tsx scripts/test-flow-building.ts"
+    "test:flow-building": "tsx scripts/test-flow-building.ts",
+    "test:api-first": "tsx scripts/test-api-first.ts"
   },
   "keywords": [
     "langflow",
@@ -31,8 +32,10 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
+    "@xyflow/react": "^12.9.2",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.1",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0"
   }
 }

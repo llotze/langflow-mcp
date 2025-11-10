@@ -1,3 +1,43 @@
+import type { Node, Edge } from '@xyflow/react';
+
+// ✅ Use ReactFlow's Node type directly
+export type FlowNode = Node<{
+  id?: string;
+  type: string;
+  node: {
+    template: Record<string, any>;
+    display_name?: string;
+    description?: string;
+    base_classes?: string[];
+    outputs?: any[];
+    icon?: string;
+    beta?: boolean;
+    legacy?: boolean;
+    frozen?: boolean;
+    tool_mode?: boolean;
+    edited?: boolean;
+    pinned?: boolean;
+    minimized?: boolean;
+    field_order?: string[];
+    conditional_paths?: any[];
+    custom_fields?: Record<string, any>;
+    metadata?: Record<string, any>;
+    category?: string;
+    key?: string;
+    documentation?: string;
+    lf_version?: string;
+    output_types?: string[];
+  };
+  selected_output?: string;
+  showNode?: boolean;
+}, 'genericNode'>;
+
+// ✅ Use ReactFlow's Edge type - KEEP ONLY THIS ONE
+export type FlowEdge = Edge<{
+  sourceHandle: any;
+  targetHandle: any;
+}>;
+
 export interface LangflowComponent {
   name: string;
   display_name: string;
@@ -56,65 +96,21 @@ export interface LangflowFlow {
   metadata?: Record<string, any>;
 }
 
-export interface FlowNode {
-  id: string;
-  type: string;
-  position: {
-    x: number;
-    y: number;
-  };
-  data: {
-    id?: string;
-    type: string;
-    node: {
-      [key: string]: any;
-      template: Record<string, any>;
-      display_name?: string;
-      description?: string;
-      base_classes?: string[];
-      outputs?: any[];
-      icon?: string;
-      beta?: boolean;
-      legacy?: boolean;
-      frozen?: boolean;
-      field_order?: string[];
-      conditional_paths?: any[];
-      custom_fields?: Record<string, any>;
-      edited?: boolean;
-      pinned?: boolean;
-      metadata?: Record<string, any>;
-      category?: string;
-      key?: string;
-      documentation?: string;
-      minimized?: boolean;
-      output_types?: string[];
-      tool_mode?: boolean;
-    };
-    selected_output?: string;
-    showNode?: boolean;  
-  };
-  measured?: {
-    height: number;
-    width: number;
-  };
-  selected?: boolean;
-  dragging?: boolean;
-}
-
-export interface FlowEdge {
-  id?: string;
-  source: string;
-  target: string;
-  sourceHandle?: string;
-  targetHandle?: string;
-  data?: {
-    sourceHandle?: any;
-    targetHandle?: any;
-  };
-  animated?: boolean;
-  selected?: boolean;
-  className?: string;
-}
+// ❌ REMOVE THIS DUPLICATE - Already defined above
+// export interface FlowEdge {
+//   id?: string;
+//   source: string;
+//   target: string;
+//   sourceHandle?: string;
+//   targetHandle?: string;
+//   data?: {
+//     sourceHandle?: any;
+//     targetHandle?: any;
+//   };
+//   animated?: boolean;
+//   selected?: boolean;
+//   className?: string;
+// }
 
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
@@ -156,6 +152,7 @@ export interface MCPToolResponse {
   message?: string;
 }
 
+// ✅ FlowDiffOperation - moved here from flowDiff.ts
 export interface FlowDiffOperation {
   operation: 'addNode' | 'removeNode' | 'updateNode' | 'addConnection' | 'removeConnection' | 'updateFlowMetadata';
   nodeId?: string;
@@ -165,4 +162,5 @@ export interface FlowDiffOperation {
   metadata?: Record<string, any>;
 }
 
+// ✅ Export everything from flowDiff.ts
 export * from './types/flowDiff.js';

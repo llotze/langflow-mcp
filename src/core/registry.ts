@@ -1,3 +1,5 @@
+/* DEPRECATED */
+
 import Database from 'better-sqlite3';
 import { LangflowComponent, ComponentSearchQuery } from '../types.js'; 
 

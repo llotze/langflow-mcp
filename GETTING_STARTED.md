@@ -1,4 +1,4 @@
-# Getting Started with Langflow MCP Server
+# Getting Started with Langflow MCP Server (API-First)
 
 ## Quick Start
 
@@ -8,35 +8,19 @@
 npm install
 ```
 
-### 2. Set Up Data
+### 2. Configure Environment
 
-You need to provide three things:
+Create a `.env` file in the project root with:
 
-#### A. Components JSON
-Place your full Langflow `components.json` file at:
 ```
-./data/components.json
-```
-
-A sample file is provided. Replace it with the actual components.json from your Langflow installation or the one provided to you.
-
-#### B. Flow Templates (Optional)
-Add exported Langflow flow JSON files to:
-```
-./data/templates/
+PORT=3000
+LANGFLOW_API_URL=http://localhost:7860
+LANGFLOW_API_KEY=your-langflow-api-key
 ```
 
-For example, add `Vector Store RAG.json` to this directory.
+### 3. Build and Run the Server
 
-#### C. Component Documentation (Optional)
-Add component markdown documentation files to:
-```
-./data/docs/
-```
-
-### 3. Run the Server
-
-Development mode (with auto-reload):
+Development mode:
 ```bash
 npm run dev
 ```
@@ -49,105 +33,64 @@ npm start
 
 ### 4. Test the Server
 
-Open a browser or use curl:
+Health check:
 ```bash
-# Health check
 curl http://localhost:3000/health
-
-# List all components
-curl http://localhost:3000/mcp/list_components
-
-# Search for components
-curl -X POST http://localhost:3000/mcp/search_components \
-  -H "Content-Type: application/json" \
-  -d '{"keyword": "openai"}'
 ```
 
-## Next Steps
-
-### Adding Real Components
-
-1. Copy your full `components.json` from Langflow to `./data/components.json`
-2. Copy flow template JSON files to `./data/templates/`
-3. Copy component documentation markdown files to `./data/docs/`
-4. Restart the server
-
-### Using the API
-
-See the main README.md for full API documentation.
-
-### Example: Creating a Flow
-
+Search for components:
 ```bash
-curl -X POST http://localhost:3000/mcp/create_flow \
+curl "http://localhost:3000/mcp/api/search?keyword=OpenAI"
+```
+
+Get component details:
+```bash
+curl "http://localhost:3000/mcp/api/components/OpenAIModel"
+```
+
+Create a flow:
+```bash
+curl -X POST http://localhost:3000/mcp/api/build-flow \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "My First Flow",
-    "description": "A simple AI flow",
+    "name": "My Chatbot Flow",
+    "description": "A simple chatbot",
     "nodes": [
-      {
-        "id": "node-1",
-        "type": "OpenAI",
-        "position": { "x": 100, "y": 100 },
-        "data": {
-          "node": {
-            "template": {
-              "api_key": "sk-...",
-              "model": "gpt-4"
-            },
-            "description": "OpenAI model",
-            "base_classes": ["LLM"],
-            "display_name": "OpenAI"
-          },
-          "type": "OpenAI",
-          "id": "node-1"
-        }
-      }
+      { "component": "ChatInput", "id": "input1", "position": { "x": 100, "y": 200 }, "params": {} },
+      { "component": "OpenAIModel", "id": "model1", "position": { "x": 400, "y": 200 }, "params": { "model_name": "gpt-4" } },
+      { "component": "ChatOutput", "id": "output1", "position": { "x": 700, "y": 200 }, "params": {} }
     ],
-    "edges": []
+    "connections": [
+      { "source": "input1", "target": "model1", "targetParam": "input_value" },
+      { "source": "model1", "target": "output1", "targetParam": "input_value" }
+    ]
   }'
 ```
 
-## Troubleshooting
+### 5. Claude Desktop Integration
 
-### Port Already in Use
-Change the port in `.env`:
-```
-PORT=3001
-```
+Add the MCP server to your Claude Desktop config:
 
-### Components Not Loading
-- Check that `components.json` exists at the path specified
-- Check the format of the JSON file
-- Check server logs for errors
-
-### Database Issues
-Delete the database and restart:
-```bash
-rm ./data/langflow.db
-npm run dev
+```json
+"langflow": {
+  "command": "node",
+  "args": ["C:\\path\\to\\langflow-mcp\\dist\\api\\mcp-server.js"],
+  "env": {
+    "MCP_MODE": "stdio",
+    "LOG_LEVEL": "error",
+    "PORT": "3001",
+    "LANGFLOW_API_URL": "http://localhost:7860",
+    "LANGFLOW_API_KEY": "your-langflow-api-key"
+  }
+}
 ```
 
-## Docker Deployment
+### 6. Troubleshooting
 
-Build:
-```bash
-docker build -t langflow-mcp .
-```
+- Ensure Langflow is running and accessible
+- Check `.env` for correct API URL and key
+- Use `npm run build` before starting in production
 
-Run:
-```bash
-docker run -p 3000:3000 \
-  -v $(pwd)/data:/app/data \
-  langflow-mcp
-```
+---
 
-## Railway Deployment
-
-1. Connect your GitHub repo to Railway
-2. Set environment variables in Railway dashboard
-3. Railway will automatically build and deploy
-
-## Support
-
-For issues or questions, check the main README.md or review the source code comments.
+**You are now ready to use Langflow MCP Server in API-first mode!**

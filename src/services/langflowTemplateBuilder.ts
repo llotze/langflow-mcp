@@ -1,3 +1,5 @@
+/* DEPRECATED */
+
 import { 
   LangflowComponent, 
   FlowNode, 
@@ -44,26 +46,30 @@ export class LangflowTemplateBuilder {
     position: { x: number; y: number },
     parameterValues: Record<string, any>
   ): FlowNode {
-    // Get the exact template from components.json
     const baseTemplate = this.getComponentTemplate(componentType);
-    
-    // Deep clone the template
-    const template: Record<string, any> = JSON.parse(JSON.stringify(baseTemplate));
+    const template = JSON.parse(JSON.stringify(baseTemplate));
 
-    // Apply user-provided parameter values
+    // Apply parameter values
     Object.keys(parameterValues).forEach(paramName => {
       if (template[paramName]) {
         template[paramName].value = parameterValues[paramName];
       }
     });
 
-    // Get the cached component data
     const componentData = this.componentsCache.get(componentType);
 
+    // ✅ ReactFlow's Node type accepts all these fields
     return {
       id: nodeId,
       type: 'genericNode',
       position,
+      // ✅ These are optional in ReactFlow's Node type
+      measured: { height: 234, width: 320 },
+      width: 320,
+      height: 234,
+      selected: false,
+      dragging: false,
+      // ✅ Our custom data payload
       data: {
         id: nodeId,
         type: componentType,
@@ -90,14 +96,10 @@ export class LangflowTemplateBuilder {
           minimized: componentData.minimized || false,
           output_types: componentData.output_types || [],
           tool_mode: component.tool_mode || false,
-          priority: 0
         },
         selected_output: this.getSelectedOutput(component),
         showNode: true
-      },
-      measured: { height: 234, width: 320 },
-      selected: false,
-      dragging: false
+      }
     };
   }
 
