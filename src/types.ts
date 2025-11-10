@@ -1,6 +1,6 @@
 import type { Node, Edge } from '@xyflow/react';
 
-// ✅ Use ReactFlow's Node type directly
+// Use ReactFlow's Node type directly
 export type FlowNode = Node<{
   id?: string;
   type: string;
@@ -32,7 +32,7 @@ export type FlowNode = Node<{
   showNode?: boolean;
 }, 'genericNode'>;
 
-// ✅ Use ReactFlow's Edge type - KEEP ONLY THIS ONE
+// Use ReactFlow's Edge type 
 export type FlowEdge = Edge<{
   sourceHandle: any;
   targetHandle: any;
@@ -96,22 +96,6 @@ export interface LangflowFlow {
   metadata?: Record<string, any>;
 }
 
-// ❌ REMOVE THIS DUPLICATE - Already defined above
-// export interface FlowEdge {
-//   id?: string;
-//   source: string;
-//   target: string;
-//   sourceHandle?: string;
-//   targetHandle?: string;
-//   data?: {
-//     sourceHandle?: any;
-//     targetHandle?: any;
-//   };
-//   animated?: boolean;
-//   selected?: boolean;
-//   className?: string;
-// }
-
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
   nodeId?: string;
@@ -152,7 +136,7 @@ export interface MCPToolResponse {
   message?: string;
 }
 
-// ✅ FlowDiffOperation - moved here from flowDiff.ts
+// FlowDiffOperation
 export interface FlowDiffOperation {
   operation: 'addNode' | 'removeNode' | 'updateNode' | 'addConnection' | 'removeConnection' | 'updateFlowMetadata';
   nodeId?: string;
@@ -162,5 +146,5 @@ export interface FlowDiffOperation {
   metadata?: Record<string, any>;
 }
 
-// ✅ Export everything from flowDiff.ts
+// Export everything from flowDiff.ts
 export * from './types/flowDiff.js';
