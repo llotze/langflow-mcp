@@ -11,7 +11,7 @@ export type FlowDiffOperationType =
 
 export interface BaseOperation {
   type: FlowDiffOperationType;
-  description?: string; // Human-readable explanation
+  description?: string; 
 }
 
 export interface AddNodeOperation extends BaseOperation {

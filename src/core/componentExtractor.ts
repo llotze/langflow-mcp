@@ -24,7 +24,6 @@ export class ComponentExtractor {
       const data = fs.readFileSync(this.componentsJsonPath, 'utf-8');
       const componentsData = JSON.parse(data);
 
-      // Parse the components structure
       return this.parseComponents(componentsData);
     } catch (error) {
       console.error('Error loading components:', error);
@@ -34,7 +33,6 @@ export class ComponentExtractor {
 
   /**
    * Parse components from the JSON structure
-   * Real Langflow structure: { category: { componentName: componentData } }
    */
   private parseComponents(componentsData: any): LangflowComponent[] {
     const components: LangflowComponent[] = [];
@@ -44,11 +42,9 @@ export class ComponentExtractor {
       return components;
     }
 
-    // Iterate through categories (top level keys)
     Object.keys(componentsData).forEach(category => {
       const categoryComponents = componentsData[category];
       
-      // Each category contains components as key-value pairs
       if (typeof categoryComponents === 'object' && !Array.isArray(categoryComponents)) {
         Object.keys(categoryComponents).forEach(componentName => {
           const componentData = categoryComponents[componentName];
@@ -70,6 +66,9 @@ export class ComponentExtractor {
    * Parse a single component
    */
   private parseComponent(comp: any, name: string, category: string): LangflowComponent {
+    // Extract output_types from the outputs array
+    const outputTypes = this.extractOutputTypes(comp.outputs || []);
+    
     return {
       name: name,
       display_name: comp.display_name || name,
@@ -78,7 +77,7 @@ export class ComponentExtractor {
       subcategory: comp.subcategory,
       parameters: this.extractParameters(comp.template || {}),
       input_types: this.extractInputTypes(comp.template || {}),
-      output_types: comp.output_types || [],
+      output_types: outputTypes,  
       tool_mode: comp.tool_mode || false,
       legacy: comp.legacy || false,
       beta: comp.beta || comp.experimental || false,
@@ -91,8 +90,31 @@ export class ComponentExtractor {
   }
 
   /**
+   * NEW: Extract output types from outputs array
+   * Converts: [{ types: ["Message"], name: "text_output" }]
+   * Into: ["Message"]
+   */
+  private extractOutputTypes(outputs: any[]): string[] {
+    if (!Array.isArray(outputs) || outputs.length === 0) {
+      return [];
+    }
+
+    const types = new Set<string>();
+    
+    outputs.forEach(output => {
+      if (output.types && Array.isArray(output.types)) {
+        output.types.forEach((type: string) => types.add(type));
+      } else if (output.selected) {
+        // Fallback to selected type
+        types.add(output.selected);
+      }
+    });
+
+    return Array.from(types);
+  }
+
+  /**
    * Extract parameters from component template
-   * FIXED: Properly extracts all parameters including input_value, api_key, etc.
    */
   private extractParameters(template: any): ComponentParameter[] {
     const parameters: ComponentParameter[] = [];
@@ -104,13 +126,12 @@ export class ComponentExtractor {
     Object.keys(template).forEach(key => {
       const field = template[key];
       
-      // Only skip these specific internal fields
+      // Skip internal fields
       if (key === '_type' || key === 'code') {
         return;
       }
 
-      // Skip if field is explicitly marked as not shown
-      // Note: show defaults to true if not specified
+      // Skip hidden fields
       if (field.show === false) {
         return;
       }
@@ -120,7 +141,7 @@ export class ComponentExtractor {
           name: field.name || key,
           display_name: field.display_name || field.name || key,
           type: this.mapLangflowType(field.type || 'str'),
-          required: false, // ✅ Always false - Langflow handles defaults
+          required: false,
           default: field.value !== undefined ? field.value : field.default,
           description: field.info || field.description || field.placeholder || '',
           options: field.options || field.list,
@@ -130,8 +151,8 @@ export class ComponentExtractor {
           file_types: field.fileTypes || field.file_types,
           input_types: field.input_types,
           load_from_db: field.load_from_db || false,
-          advanced: field.advanced === true,  // Track if advanced
-          show: field.show !== false,  // Track visibility
+          advanced: field.advanced === true,
+          show: field.show !== false,
         });
       } catch (error) {
         console.error(`Error parsing parameter ${key}:`, error);
@@ -168,7 +189,6 @@ export class ComponentExtractor {
 
   /**
    * Extract input types from template fields
-   * Input types define what kind of data a field can accept
    */
   private extractInputTypes(template: any): string[] {
     if (!template || typeof template !== 'object') {
@@ -184,7 +204,6 @@ export class ComponentExtractor {
         field.input_types.forEach((type: string) => inputTypes.add(type));
       }
       
-      // Also check the field type itself
       if (field.type && typeof field.type === 'string') {
         inputTypes.add(field.type);
       }
@@ -198,13 +217,11 @@ export class ComponentExtractor {
    */
   public loadComponentDocs(componentName: string): string | null {
     try {
-      // Try different possible doc file locations
       const possiblePaths = [
         path.join(this.docsPath, `${componentName}.md`),
         path.join(this.docsPath, `${componentName}.mdx`),
         path.join(this.docsPath, 'components', `${componentName}.md`),
         path.join(this.docsPath, 'components', `${componentName}.mdx`),
-        // Also try kebab-case versions
         path.join(this.docsPath, `${this.toKebabCase(componentName)}.md`),
         path.join(this.docsPath, `${this.toKebabCase(componentName)}.mdx`),
       ];
@@ -222,9 +239,6 @@ export class ComponentExtractor {
     }
   }
 
-  /**
-   * Convert string to kebab-case
-   */
   private toKebabCase(str: string): string {
     return str
       .replace(/([a-z])([A-Z])/g, '$1-$2')

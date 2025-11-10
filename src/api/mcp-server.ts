@@ -9,8 +9,9 @@ import { ComponentExtractor } from '../core/componentExtractor.js';
 import { FlowValidator } from '../services/flowValidator.js';
 import { FlowDiffEngine } from '../services/flowDiffEngine.js';
 import { loadConfig } from '../core/config.js'; 
-import { ComponentSearchQuery, LangflowFlow } from '../types.js';
+import { ComponentSearchQuery, LangflowFlow, FlowNode, FlowEdge } from '../types.js';
 import { FlowDiffRequest } from '../types/flowDiff.js';
+import { LangflowTemplateBuilder } from '../services/langflowTemplateBuilder.js';
 
 async function main() {
   // Setup
@@ -32,9 +33,16 @@ async function main() {
   const categories = registry.getCategories();
   console.error(`✅ Loaded ${components.length} components across ${categories.length} categories`);
 
+  // Load raw components data for template builder
+  const fs = await import('fs');
+  const componentsData = JSON.parse(
+    fs.readFileSync(config.componentsJsonPath, 'utf-8')
+  );
+
   // Initialize flow services
   const validator = new FlowValidator(registry);
   const diffEngine = new FlowDiffEngine(registry, validator);
+  const templateBuilder = new LangflowTemplateBuilder(componentsData); // Pass componentsData
 
   // Create MCP server
   const server = new Server(
@@ -137,6 +145,43 @@ async function main() {
             },
           },
           required: ['flow', 'operations'],
+        },
+      },
+      {
+        name: 'create_flow',
+        description: 'Create a complete Langflow-compatible flow JSON from component specifications. Returns properly formatted flow ready for import.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Flow name' },
+            description: { type: 'string', description: 'Flow description' },
+            nodes: {
+              type: 'array',
+              description: 'Array of node specifications',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  type: { type: 'string', description: 'Component type name' },
+                  position: { type: 'object' },
+                  parameters: { type: 'object', description: 'Parameter values' }
+                }
+              }
+            },
+            edges: {
+              type: 'array',
+              description: 'Array of edge specifications',
+              items: {
+                type: 'object',
+                properties: {
+                  source: { type: 'string' },
+                  target: { type: 'string' },
+                  targetParam: { type: 'string', description: 'Target parameter name' }
+                }
+              }
+            }
+          },
+          required: ['name', 'nodes']
         },
       },
     ],
@@ -318,6 +363,93 @@ async function main() {
           };
         }
 
+        case 'create_flow': {
+          if (!args?.name || !args?.nodes) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'name and nodes are required' }, null, 2)
+              }],
+              isError: true
+            };
+          }
+
+          // Properly type the flow object
+          const flow: LangflowFlow = {
+            name: args.name as string,
+            description: args.description as string || '',
+            data: {
+              nodes: [] as FlowNode[],  // Explicitly type as FlowNode[]
+              edges: [] as FlowEdge[],  // Explicitly type as FlowEdge[]
+              viewport: { x: 0, y: 0, zoom: 1 }
+            }
+          };
+
+          // Build nodes
+          for (const nodeSpec of args.nodes as any[]) {
+            const component = registry.getComponent(nodeSpec.type);
+            if (!component) {
+              return {
+                content: [{
+                  type: 'text',
+                  text: JSON.stringify({ 
+                    error: `Component '${nodeSpec.type}' not found` 
+                  }, null, 2)
+                }],
+                isError: true
+              };
+            }
+
+            const node = templateBuilder.buildNode(
+              nodeSpec.type,
+              component,
+              nodeSpec.id,
+              nodeSpec.position,
+              nodeSpec.parameters || {}
+            );
+
+            flow.data.nodes.push(node);
+          }
+
+          // Build edges
+          if (args.edges && Array.isArray(args.edges)) {
+            for (const edgeSpec of args.edges as any[]) {
+              const sourceNode = flow.data.nodes.find((n: FlowNode) => n.data?.id === edgeSpec.source);
+              const targetNode = flow.data.nodes.find((n: FlowNode) => n.data?.id === edgeSpec.target);
+
+              if (!sourceNode || !targetNode) {
+                console.error(`Skipping edge: source or target node not found (${edgeSpec.source} -> ${edgeSpec.target})`);
+                continue;
+              }
+
+              const sourceComp = registry.getComponent(sourceNode.data.type);
+              const targetComp = registry.getComponent(targetNode.data.type);
+
+              if (!sourceComp || !targetComp) {
+                console.error(`Skipping edge: component not found for nodes`);
+                continue;
+              }
+
+              const edge = templateBuilder.buildEdge(
+                edgeSpec.source,
+                edgeSpec.target,
+                sourceComp,
+                targetComp,
+                edgeSpec.targetParam || 'input_value'
+              );
+
+              flow.data.edges.push(edge);
+            }
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(flow, null, 2)
+            }]
+          };
+        }
+
         default:
           return {
             content: [
@@ -330,7 +462,8 @@ async function main() {
                     'get_component', 
                     'list_categories',
                     'validate_flow',
-                    'update_flow'
+                    'update_flow',
+                    'create_flow'
                   ]
                 }, null, 2),
               },
