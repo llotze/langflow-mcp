@@ -43,6 +43,61 @@ async function main() {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
+        name: 'search_langflow_templates',
+        description: 'Search Langflow templates by keyword, metadata, or component usage',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            keyword: { type: 'string', description: 'Search term (name, description, tags)' },
+            tags: { type: 'string', description: 'Comma-separated tags' },
+            category: { type: 'string', description: 'Template category' },
+            component: { type: 'string', description: 'Component type to filter by' },
+            page: { type: 'number', description: 'Page number' },
+            pageSize: { type: 'number', description: 'Results per page' }
+          }
+        }
+      },
+      {
+        name: 'get_langflow_template',
+        description: 'Get full or essentials info for a Langflow template by flowId',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { type: 'string', description: 'Langflow template/flow ID' }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'tweak_langflow_template',
+        description: 'Apply tweaks to a Langflow template and save as new or update existing',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { type: 'string', description: 'Langflow template/flow ID' },
+            tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
+            saveAsNew: { type: 'boolean', description: 'Save as new template' },
+            newName: { type: 'string', description: 'New name for template' },
+            newDescription: { type: 'string', description: 'New description for template' }
+          },
+          required: ['flowId', 'tweaks']
+        }
+      },
+      {
+        name: 'run_langflow_template_with_tweaks',
+        description: 'Run a Langflow template with runtime tweaks (not persisted)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { type: 'string', description: 'Langflow template/flow ID' },
+            tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
+            input: { type: 'object', description: 'Input for flow run' }
+          },
+          required: ['flowId', 'input']
+        }
+      },
+      // Existing tools...
+      {
         name: 'search_langflow_components',
         description: 'Search for available Langflow components by keyword',
         inputSchema: {
@@ -103,6 +158,15 @@ async function main() {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        // MCPTools logic for template endpoints
+        const mcpTools = langflowApi
+          ? new (await import('../tools.js')).MCPTools(
+              undefined,
+              undefined,
+              config.langflowApiUrl,
+              config.langflowApiKey
+            )
+          : null;
     if (!langflowApi) {
       return {
         content: [{
@@ -119,6 +183,48 @@ async function main() {
     try {
       const args = request.params.arguments || {};
       switch (request.params.name) {
+        case 'search_langflow_templates': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          // Simulate Express req/res
+          const req = { query: args };
+          let result: any;
+          await mcpTools.searchTemplates(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        case 'get_langflow_template': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: args };
+          let result: any;
+          await mcpTools.getTemplate(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        case 'tweak_langflow_template': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { flowId: args.flowId }, body: args };
+          let result: any;
+          await mcpTools.tweakTemplate(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        case 'run_langflow_template_with_tweaks': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { flowId: args.flowId }, body: args };
+          let result: any;
+          await mcpTools.runTemplateWithTweaks(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        // Existing tools...
         case 'search_langflow_components': {
           const results = await componentService.searchComponents(args.keyword as string);
           return {

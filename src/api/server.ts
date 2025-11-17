@@ -31,6 +31,11 @@ async function main() {
 
   // API-first endpoints
   if (config.langflowApiUrl && config.langflowApiKey) {
+      // --- Template Endpoints (search/get/tweak/run) ---
+      app.get('/mcp/api/search-templates', (req: Request, res: Response) => mcpTools.searchTemplates(req, res));
+      app.get('/mcp/api/get-template/:flowId', (req: Request, res: Response) => mcpTools.getTemplate(req, res));
+      app.post('/mcp/api/tweak-template/:flowId', (req: Request, res: Response) => mcpTools.tweakTemplate(req, res));
+      app.post('/mcp/api/run-template/:flowId', (req: Request, res: Response) => mcpTools.runTemplateWithTweaks(req, res));
     app.get('/mcp/api/search', (req, res) => mcpTools.searchLangflowComponents(req, res));
     app.get('/mcp/api/components/:componentName', (req, res) => mcpTools.getLangflowComponentDetails(req, res));
     app.post('/mcp/api/build-flow', (req, res) => mcpTools.buildAndDeployFlow(req, res));

@@ -3,6 +3,147 @@ import { LangflowComponentService } from './services/LangflowComponentService.js
 import { LangflowFlowBuilder } from './services/LangflowFlowBuilder.js';
 
 export class MCPTools {
+    // --- 1. Search Templates ---
+    public async searchTemplates(req: any, res: any): Promise<void> {
+      try {
+        const { keyword, tags, category, component, page = 1, pageSize = 20 } = req.query;
+        const flows = await this.langflowApi!.client.get('/api/v1/flows/?get_all=true');
+        let results = flows.data;
+
+        // Keyword search (name, description)
+        if (keyword) {
+          const kw = keyword.toLowerCase();
+          results = results.filter((f: any) =>
+            (f.name && f.name.toLowerCase().includes(kw)) ||
+            (f.description && f.description.toLowerCase().includes(kw))
+          );
+        }
+        // Metadata search (tags, category)
+        if (tags) {
+          const tagArr = Array.isArray(tags) ? tags : String(tags).split(',');
+          results = results.filter((f: any) =>
+            f.tags && tagArr.some((t: string) => f.tags.includes(t))
+          );
+        }
+        if (category) {
+          results = results.filter((f: any) => f.category === category);
+        }
+        // Component usage search
+        if (component) {
+          results = results.filter((f: any) =>
+            f.data?.nodes?.some((n: any) => n.type === component)
+          );
+        }
+        // Essentials formatting
+        const essentials = results.map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          description: f.description,
+          tags: f.tags,
+          category: f.category,
+          nodes: f.data?.nodes?.map((n: any) => n.type),
+        }));
+        // Pagination
+        const start = (page - 1) * pageSize;
+        const paged = essentials.slice(start, start + pageSize);
+        res.json({ total: essentials.length, page, pageSize, results: paged });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+
+    // --- 2. Get Template ---
+    public async getTemplate(req: any, res: any): Promise<void> {
+      try {
+        const { flowId } = req.params;
+        let flow;
+        try {
+          flow = await this.langflowApi!.client.get(`/api/v1/flows/${flowId}`);
+        } catch (err: any) {
+          if (err?.response?.status === 404) {
+            return res.status(404).json({ error: 'Template not found' });
+          }
+          return res.status(500).json({ error: err.message });
+        }
+        if (!flow.data) return res.status(404).json({ error: 'Template not found' });
+        // Essentials formatting
+        const f = flow.data;
+        const essentials = {
+          id: f.id,
+          name: f.name,
+          description: f.description,
+          tags: f.tags,
+          category: f.category,
+          nodes: f.data?.nodes?.map((n: any) => n.type),
+          full: f,
+        };
+        res.json(essentials);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+
+    // --- 3. Tweak Template ---
+    public async tweakTemplate(req: any, res: any): Promise<void> {
+      try {
+        const { flowId } = req.params;
+        const { tweaks, saveAsNew, newName, newDescription } = req.body;
+        // Fetch template
+        const flowResp = await this.langflowApi!.client.get(`/api/v1/flows/${flowId}`);
+        const flow = flowResp.data;
+        if (!flow) return res.status(404).json({ error: 'Template not found' });
+        // Apply tweaks (parameter updates)
+        if (tweaks && typeof tweaks === 'object') {
+          for (const [nodeId, params] of Object.entries(tweaks)) {
+            const node = flow.data.nodes.find((n: any) => n.id === nodeId);
+            if (node && node.data?.node?.template) {
+              Object.assign(node.data.node.template, params);
+            }
+          }
+        }
+        // Optionally update name/description
+        if (newName) flow.name = newName;
+        if (newDescription) flow.description = newDescription;
+        // Save as new or update existing
+        let result;
+        if (saveAsNew) {
+          result = await this.langflowApi!.client.post('/api/v1/flows/', {
+            name: flow.name,
+            description: flow.description,
+            data: flow.data,
+            tags: flow.tags,
+            category: flow.category,
+          });
+        } else {
+          result = await this.langflowApi!.client.patch(`/api/v1/flows/${flowId}`, {
+            name: flow.name,
+            description: flow.description,
+            data: flow.data,
+            tags: flow.tags,
+            category: flow.category,
+          });
+        }
+        res.json({ success: true, flow: result.data });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+
+    // --- 4. Runtime Tweaks (run with tweaks, not persisted) ---
+    public async runTemplateWithTweaks(req: any, res: any): Promise<void> {
+      try {
+        const { flowId } = req.params;
+        const { tweaks, input } = req.body;
+        // POST to /api/v1/run/{flowId} with tweaks
+        const result = await this.langflowApi!.client.post(`/api/v1/run/${flowId}`, {
+          input,
+          tweaks,
+        });
+        res.json(result.data);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
   private langflowApi?: LangflowApiService;
   private componentService?: LangflowComponentService;
   private flowBuilder?: LangflowFlowBuilder;

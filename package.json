@@ -11,7 +11,8 @@
     "start": "node dist/api/server.js",
     "start:mcp": "node dist/api/mcp-server.js",
     "test:api-first": "tsx scripts/test-api-first.ts",
-    "test:flow-diff": "tsx scripts/test-flowdiff-validator.ts"
+    "test:flow-diff": "tsx scripts/test-flowdiff-validator.ts",
+    "test:template-tools": "tsx scripts/test-template-tools.ts"
   },
   "keywords": [
     "langflow",
@@ -24,7 +25,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.5",
-    "@types/node": "^24.10.0",
+    "@types/node": "^24.10.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
