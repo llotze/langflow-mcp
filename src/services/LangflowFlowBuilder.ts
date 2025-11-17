@@ -2,6 +2,12 @@ import { LangflowComponentService } from './LangflowComponentService.js';
 import { LangflowApiService } from './langflowApiService.js';
 import { FlowNode, FlowEdge, LangflowFlow } from '../types.js';
 
+// Utility for Langflow's custom handle escaping
+function escapeJson(obj: any): string {
+  // Langflow expects "œ" instead of regular quotes
+  return JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
+}
+
 export class LangflowFlowBuilder {
   constructor(
     private componentService: LangflowComponentService,
@@ -15,9 +21,10 @@ export class LangflowFlowBuilder {
     componentName: string,
     nodeId: string,
     position: { x: number; y: number },
-    parameterValues: Record<string, any> = {}
+    parameterValues: Record<string, any> = {},
+    index?: number // index for spacing
   ): Promise<FlowNode> {
-    // Get the ACTUAL template from Langflow
+    // Get the actual template from Langflow
     const componentTemplate = await this.componentService.getComponentTemplate(componentName);
     
     // Clone template to avoid mutation
@@ -30,11 +37,16 @@ export class LangflowFlowBuilder {
       }
     });
 
-    // Build node using Langflow's EXACT structure
+    // Space nodes horizontally by index to avoid overlap
+    const nodePosition = index !== undefined
+      ? { x: 100 + index * 350, y: 200 }
+      : position;
+
+    // Build node using Langflow's structure
     return {
       id: nodeId,
-      type: 'genericNode', // Langflow always uses this
-      position,
+      type: 'genericNode',
+      position: nodePosition,
       data: {
         id: nodeId,
         type: componentName,
@@ -44,7 +56,6 @@ export class LangflowFlowBuilder {
           description: componentTemplate.description,
           base_classes: componentTemplate.base_classes || [],
           outputs: componentTemplate.outputs || [],
-          // ... other metadata from componentTemplate
         }
       },
       measured: { height: 234, width: 320 },
@@ -69,31 +80,35 @@ export class LangflowFlowBuilder {
     const sourceTemplate = await this.componentService.getComponentTemplate(sourceComponent);
     const targetTemplate = await this.componentService.getComponentTemplate(targetComponent);
 
-    const sourceOutput = sourceTemplate.outputs?.[0] || { name: 'output', types: ['Message'] };
+    // Use correct output/input port info for handles
+    const sourceOutput = sourceTemplate.outputs?.[0] || { name: 'message', types: ['Message'] };
     const targetInput = targetTemplate.template[targetParam];
 
-    const sourceHandle = {
-      baseClasses: sourceOutput.types || ['Message'],
-      dataType: sourceOutput.selected || sourceOutput.types?.[0] || 'Message',
+    const sourceHandleObj = {
+      dataType: sourceComponent,
       id: sourceId,
       name: sourceOutput.name,
       output_types: sourceOutput.types || ['Message']
     };
 
-    const targetHandle = {
+    const targetHandleObj = {
       fieldName: targetParam,
       id: targetId,
       inputTypes: targetInput?.input_types || ['Message'],
-      type: targetInput?.type || 'Message'
+      type: targetInput?.type || 'str'
     };
 
+    // Use Langflow's custom escaping for handles and edge id
+    const sourceHandleStr = escapeJson(sourceHandleObj);
+    const targetHandleStr = escapeJson(targetHandleObj);
+
     return {
-      id: `reactflow__edge-${sourceId}${JSON.stringify(sourceHandle)}-${targetId}${JSON.stringify(targetHandle)}`,
+      id: `reactflow__edge-${sourceId}${sourceHandleStr}-${targetId}${targetHandleStr}`,
       source: sourceId,
       target: targetId,
-      sourceHandle: JSON.stringify(sourceHandle),
-      targetHandle: JSON.stringify(targetHandle),
-      data: { sourceHandle, targetHandle },
+      sourceHandle: sourceHandleStr,
+      targetHandle: targetHandleStr,
+      data: { sourceHandle: sourceHandleObj, targetHandle: targetHandleObj },
       animated: false,
       selected: false,
       className: ''
@@ -118,14 +133,13 @@ export class LangflowFlowBuilder {
       targetParam?: string;
     }>
   ): Promise<any> {
-    // Build nodes
+    // Pass index to buildNode for spacing
     const nodes = await Promise.all(
-      nodeConfigs.map(config =>
-        this.buildNode(config.component, config.id, config.position, config.params)
+      nodeConfigs.map((config, idx) =>
+        this.buildNode(config.component, config.id, config.position, config.params, idx)
       )
     );
 
-    // Build edges
     const edges = await Promise.all(
       connections.map(conn => {
         const sourceNode = nodeConfigs.find(n => n.id === conn.source);

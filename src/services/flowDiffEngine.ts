@@ -1,4 +1,4 @@
-import { LangflowFlow, FlowNode, FlowEdge } from '../types.js';
+import { LangflowComponent, LangflowFlow, FlowNode, FlowEdge } from '../types.js';
 import {
   FlowDiffOperation,
   FlowDiffRequest,
@@ -12,11 +12,10 @@ import {
   UpdateMetadataOperation,
 } from '../types/flowDiff.js';
 import { FlowValidator, ValidationResult } from './flowValidator.js';
-import { ComponentRegistry } from '../core/registry.js';
 
 export class FlowDiffEngine {
   constructor(
-    private registry: ComponentRegistry,
+    private componentCatalog: Record<string, LangflowComponent>,
     private validator: FlowValidator
   ) {}
 
@@ -126,8 +125,13 @@ export class FlowDiffEngine {
       throw new Error(`Node with ID "${node.id}" already exists`);
     }
 
+    // Validate node type exists
+    if (!node.type) {
+      throw new Error(`Node type is required for node "${node.id}"`);
+    }
+
     // Validate component exists
-    const component = this.registry.getComponent(node.type);
+    const component = this.componentCatalog[node.type];
     if (!component) {
       throw new Error(`Unknown component type: "${node.type}"`);
     }

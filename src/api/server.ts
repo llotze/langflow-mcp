@@ -6,7 +6,9 @@ async function main() {
   console.log('Starting Langflow MCP Server...');
 
   const config = loadConfig();
-  console.log('Configuration loaded:', config);
+  // Redact API key before logging
+  const { langflowApiKey, ...safeConfig } = config;
+  console.log('Configuration loaded:', { ...safeConfig, langflowApiKey: langflowApiKey ? '[SET]' : '[NOT SET]' });
 
   // Pass only API credentials
   const mcpTools = new MCPTools(
@@ -33,6 +35,18 @@ async function main() {
     app.get('/mcp/api/components/:componentName', (req, res) => mcpTools.getLangflowComponentDetails(req, res));
     app.post('/mcp/api/build-flow', (req, res) => mcpTools.buildAndDeployFlow(req, res));
     app.post('/mcp/api/test-flow', (req, res) => mcpTools.createMinimalTestFlow(req, res));
+    app.get('/mcp/langflow/flows/:flowId', async (req, res) => {
+      try {
+        const flow = await mcpTools['langflowApi']?.getFlow(req.params.flowId);
+        if (flow) {
+          res.json({ success: true, data: flow });
+        } else {
+          res.status(404).json({ success: false, error: 'Flow not found' });
+        }
+      } catch (err: any) {
+        res.status(404).json({ success: false, error: err.message });
+      }
+    });
   } else {
     console.log('Langflow API integration disabled');
   }

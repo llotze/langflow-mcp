@@ -1,5 +1,4 @@
 import { LangflowFlow, FlowNode, FlowEdge, LangflowComponent } from '../types.js';
-import { ComponentRegistry } from '../core/registry.js';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
@@ -22,7 +21,7 @@ export interface ValidationResult {
 }
 
 export class FlowValidator {
-  constructor(private registry: ComponentRegistry) {}
+  constructor(private componentCatalog: Record<string, LangflowComponent>) {}
 
   /**
    * Validate entire flow structure
@@ -113,7 +112,7 @@ export class FlowValidator {
     }
 
     // 3. Check if component exists
-    const component = this.registry.getComponent(node.type);
+    const component = this.componentCatalog[node.type];
     if (!component) {
       issues.push({
         severity: 'error',

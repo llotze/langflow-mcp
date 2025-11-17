@@ -30,7 +30,7 @@ export type FlowNode = Node<{
   };
   selected_output?: string;
   showNode?: boolean;
-}, 'genericNode'>;
+}>;
 
 // Use ReactFlow's Edge type 
 export type FlowEdge = Edge<{
