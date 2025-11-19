@@ -15,6 +15,7 @@ import { loadConfig } from '../core/config.js';
 import { LangflowApiService } from '../services/langflowApiService.js';
 import { LangflowComponentService } from '../services/LangflowComponentService.js';
 import { LangflowFlowBuilder } from '../services/LangflowFlowBuilder.js';
+import { MCPTools } from '../tools.js';
 
 async function main() {
   const config = loadConfig();
@@ -59,13 +60,13 @@ async function main() {
       },
       {
         name: 'get_langflow_template',
-        description: 'Get full or essentials info for a Langflow template by flowId',
+        description: 'Get full or essentials info for a Langflow template by templateId',
         inputSchema: {
           type: 'object',
           properties: {
-            flowId: { type: 'string', description: 'Langflow template/flow ID' }
+            templateId: { type: 'string', description: 'Langflow template ID' }
           },
-          required: ['flowId']
+          required: ['templateId']
         }
       },
       {
@@ -74,13 +75,13 @@ async function main() {
         inputSchema: {
           type: 'object',
           properties: {
-            flowId: { type: 'string', description: 'Langflow template/flow ID' },
+            templateId: { type: 'string', description: 'Langflow template ID' },
             tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
             saveAsNew: { type: 'boolean', description: 'Save as new template' },
             newName: { type: 'string', description: 'New name for template' },
             newDescription: { type: 'string', description: 'New description for template' }
           },
-          required: ['flowId', 'tweaks']
+          required: ['templateId', 'tweaks']
         }
       },
       {
@@ -89,11 +90,11 @@ async function main() {
         inputSchema: {
           type: 'object',
           properties: {
-            flowId: { type: 'string', description: 'Langflow template/flow ID' },
+            templateId: { type: 'string', description: 'Langflow template ID' },
             tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
             input: { type: 'object', description: 'Input for flow run' }
           },
-          required: ['flowId', 'input']
+          required: ['templateId', 'input']
         }
       },
       // Existing tools...
@@ -157,16 +158,16 @@ async function main() {
     ],
   }));
 
+  // Replace MCPTools logic for template endpoints with local template usage
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-        // MCPTools logic for template endpoints
-        const mcpTools = langflowApi
-          ? new (await import('../tools.js')).MCPTools(
-              undefined,
-              undefined,
-              config.langflowApiUrl,
-              config.langflowApiKey
-            )
-          : null;
+    const mcpTools = langflowApi
+      ? new MCPTools(
+          undefined,
+          undefined,
+          config.langflowApiUrl,
+          config.langflowApiKey
+        )
+      : null;
     if (!langflowApi) {
       return {
         content: [{
@@ -206,7 +207,7 @@ async function main() {
         }
         case 'tweak_langflow_template': {
           if (!mcpTools) throw new Error('Langflow API not configured');
-          const req = { params: { flowId: args.flowId }, body: args };
+          const req = { params: { templateId: args.templateId }, body: args };
           let result: any;
           await mcpTools.tweakTemplate(req, {
             json: (data: any) => { result = data; },
@@ -216,7 +217,7 @@ async function main() {
         }
         case 'run_langflow_template_with_tweaks': {
           if (!mcpTools) throw new Error('Langflow API not configured');
-          const req = { params: { flowId: args.flowId }, body: args };
+          const req = { params: { templateId: args.templateId }, body: args };
           let result: any;
           await mcpTools.runTemplateWithTweaks(req, {
             json: (data: any) => { result = data; },

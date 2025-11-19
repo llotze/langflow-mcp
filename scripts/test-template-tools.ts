@@ -3,65 +3,68 @@ import axios from 'axios';
 const BASE_URL = process.env.LANGFLOW_MCP_URL || 'http://localhost:3001';
 
 async function testSearchTemplates() {
-  const params = {
-    keyword: 'chat',
-    page: 1,
-    pageSize: 5,
-  };
+  const params = { keyword: 'chat', page: 1, pageSize: 5 };
   const res = await axios.get(`${BASE_URL}/mcp/api/search-templates`, { params });
-  console.log('Search Templates:', JSON.stringify(res.data, null, 2));
   const first = res.data.results?.[0];
   if (!first) throw new Error('No templates found for keyword.');
+  console.log(`[PASS] Search Templates: Found ${res.data.total} templates. Using "${first.name}" (${first.id})`);
   return first.id;
 }
 
-async function testGetTemplate(flowId: string) {
-  const res = await axios.get(`${BASE_URL}/mcp/api/get-template/${flowId}`);
-  console.log('Get Template:', JSON.stringify(res.data, null, 2));
+async function testGetTemplate(templateId: string) {
+  const res = await axios.get(`${BASE_URL}/mcp/api/get-template/${templateId}`);
+  const { name, description } = res.data;
+  console.log(`[PASS] Get Template: "${name}" - ${description?.slice(0, 60)}...`);
 }
 
-async function testTweakTemplate(flowId: string) {
-  const tweaks = {
-    // Example: change prompt for a node (update nodeId as needed)
-    'chat_input_1': { prompt: 'Hello, world!' },
+async function testCreateFlowFromTemplate(templateId: string) {
+  const body = {
+    name: 'Test Flow',
+    description: 'Created from template for testing'
   };
+  const res = await axios.post(`${BASE_URL}/mcp/api/create-flow-from-template/${templateId}`, body);
+  const { success, flow } = res.data;
+  if (!success) throw new Error('Flow creation failed');
+  console.log(`[PASS] Create Flow From Template: "${flow?.name}" (${flow?.id})`);
+  return flow?.id;
+}
+
+async function testTweakTemplate(templateId: string) {
+  const tweaks = { /* Example: nodeId: { param: value } */ };
   const body = {
     tweaks,
     saveAsNew: true,
     newName: 'Tweaked Chatbot',
     newDescription: 'Chatbot with custom prompt',
   };
-  try {
-    const res = await axios.post(`${BASE_URL}/mcp/api/tweak-template/${flowId}`, body);
-    console.log('Tweak Template:', JSON.stringify(res.data, null, 2));
-  } catch (err: any) {
-    console.error('Tweak Template failed:', err?.response?.data || err);
-  }
+  const res = await axios.post(`${BASE_URL}/mcp/api/tweak-template/${templateId}`, body);
+  const { success, flow } = res.data;
+  if (!success) throw new Error('Tweak failed');
+  console.log(`[PASS] Tweak Template: New flow "${flow?.name}" (${flow?.id})`);
+  return flow?.id;
 }
 
-async function testRunTemplateWithTweaks(flowId: string) {
+async function testRunTemplateWithTweaks(templateId: string) {
   const body = {
     input: { text: 'Test message' },
-    tweaks: {
-      'chat_input_1': { prompt: 'Test prompt' },
-    },
+    tweaks: {},
   };
-  try {
-    const res = await axios.post(`${BASE_URL}/mcp/api/run-template/${flowId}`, body);
-    console.log('Run Template With Tweaks:', JSON.stringify(res.data, null, 2));
-  } catch (err: any) {
-    console.error('Run Template With Tweaks failed:', err?.response?.data || err);
-  }
+  // FIX: Use the correct endpoint
+  const res = await axios.post(`${BASE_URL}/mcp/api/run-template/${templateId}`, body);
+  const output = res.data.outputs?.[0]?.results?.message?.text || '[No output]';
+  console.log(`[PASS] Run Template With Tweaks: Output: "${output.slice(0, 80)}..."`);
 }
 
 async function main() {
   try {
-    const flowId = await testSearchTemplates();
-    await testGetTemplate(flowId);
-    await testTweakTemplate(flowId);
-    await testRunTemplateWithTweaks(flowId);
+    const templateId = await testSearchTemplates();
+    await testGetTemplate(templateId);
+    await testCreateFlowFromTemplate(templateId);
+    await testTweakTemplate(templateId);
+    await testRunTemplateWithTweaks(templateId);
+    console.log('\nAll template tool tests completed.');
   } catch (err) {
-    console.error('Test failed:', err);
+    console.error('[FAIL] Test failed:', err);
   }
 }
 

@@ -23,11 +23,11 @@ export interface FlowRunResult {
 }
 
 export class LangflowApiService {
-  public client: AxiosInstance;  // ✅ Make public for component service
-  public baseUrl: string;        // ✅ Make public for URL building
+  public client: AxiosInstance;  // Make public for component service
+  public baseUrl: string;        // Make public for URL building
 
   constructor(apiUrl: string, apiKey: string) {
-    this.baseUrl = apiUrl.replace(/\/$/, ''); // Remove trailing slash
+    this.baseUrl = apiUrl.replace(/\/$/, ''); 
     
     this.client = axios.create({
       baseURL: this.baseUrl,
