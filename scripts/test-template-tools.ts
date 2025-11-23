@@ -29,40 +29,38 @@ async function testCreateFlowFromTemplate(templateId: string) {
   return flow?.id;
 }
 
-async function testTweakTemplate(templateId: string) {
-  const tweaks = { /* Example: nodeId: { param: value } */ };
+async function testTweakFlow(flowId: string) {
+  // Example tweaks: update the prompt of a node (replace with actual nodeId and param)
+  const tweaks = { /* nodeId: { param: value } */ };
   const body = {
     tweaks,
-    saveAsNew: true,
-    newName: 'Tweaked Chatbot',
-    newDescription: 'Chatbot with custom prompt',
+    newName: 'Tweaked Flow',
+    newDescription: 'Flow with custom tweaks',
   };
-  const res = await axios.post(`${BASE_URL}/mcp/api/tweak-template/${templateId}`, body);
+  const res = await axios.post(`${BASE_URL}/mcp/api/tweak-flow/${flowId}`, body);
   const { success, flow } = res.data;
   if (!success) throw new Error('Tweak failed');
-  console.log(`[PASS] Tweak Template: New flow "${flow?.name}" (${flow?.id})`);
+  console.log(`[PASS] Tweak Flow: Updated flow "${flow?.name}" (${flow?.id})`);
   return flow?.id;
 }
 
-async function testRunTemplateWithTweaks(templateId: string) {
+async function testRunFlow(flowId: string) {
   const body = {
     input: { text: 'Test message' },
-    tweaks: {},
   };
-  // FIX: Use the correct endpoint
-  const res = await axios.post(`${BASE_URL}/mcp/api/run-template/${templateId}`, body);
+  const res = await axios.post(`${BASE_URL}/mcp/api/run-flow/${flowId}`, body);
   const output = res.data.outputs?.[0]?.results?.message?.text || '[No output]';
-  console.log(`[PASS] Run Template With Tweaks: Output: "${output.slice(0, 80)}..."`);
+  console.log(`[PASS] Run Flow: Output: "${output.slice(0, 80)}..."`);
 }
 
 async function main() {
   try {
     const templateId = await testSearchTemplates();
     await testGetTemplate(templateId);
-    await testCreateFlowFromTemplate(templateId);
-    await testTweakTemplate(templateId);
-    await testRunTemplateWithTweaks(templateId);
-    console.log('\nAll template tool tests completed.');
+    const flowId = await testCreateFlowFromTemplate(templateId);
+    const tweakedFlowId = await testTweakFlow(flowId);
+    await testRunFlow(tweakedFlowId);
+    console.log('\nAll flow tool tests completed.');
   } catch (err) {
     console.error('[FAIL] Test failed:', err);
   }

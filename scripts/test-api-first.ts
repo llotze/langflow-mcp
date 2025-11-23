@@ -8,7 +8,6 @@ import axios from 'axios';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import process from 'process';
 
 // Load environment variables
 const __filename = fileURLToPath(import.meta.url);

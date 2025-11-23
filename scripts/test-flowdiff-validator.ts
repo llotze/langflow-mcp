@@ -2,7 +2,6 @@ import { LangflowComponent, LangflowFlow, FlowNode, FlowEdge } from '../src/type
 import { FlowValidator } from '../src/services/flowValidator.js';
 import { FlowDiffEngine } from '../src/services/flowDiffEngine.js';
 import { AddNodeOperation, RemoveNodeOperation } from '../src/types/flowDiff.js';
-import process from 'process';
 
 // Dummy catalog for testing
 const componentCatalog: Record<string, LangflowComponent> = {

@@ -29,13 +29,12 @@ async function main() {
     });
   });
 
-  // API-first endpoints
   if (config.langflowApiUrl && config.langflowApiKey) {
-    // --- Template Endpoints (search/get/tweak/run) ---
     app.get('/mcp/api/search-templates', (req: Request, res: Response) => mcpTools.searchTemplates(req, res));
     app.get('/mcp/api/get-template/:templateId', (req: Request, res: Response) => mcpTools.getTemplate(req, res));
-    app.post('/mcp/api/tweak-template/:templateId', (req: Request, res: Response) => mcpTools.tweakTemplate(req, res));
-    app.post('/mcp/api/run-template/:templateId', (req: Request, res: Response) => mcpTools.runTemplateWithTweaks(req, res));
+    app.post('/mcp/api/create-flow-from-template/:templateId', (req: Request, res: Response) => mcpTools.createFlowFromTemplate(req, res));
+    app.post('/mcp/api/tweak-flow/:flowId', (req: Request, res: Response) => mcpTools.tweakFlow(req, res));
+    app.post('/mcp/api/run-flow/:flowId', (req: Request, res: Response) => mcpTools.runFlow(req, res));
     app.get('/mcp/api/search', (req, res) => mcpTools.searchLangflowComponents(req, res));
     app.get('/mcp/api/components/:componentName', (req, res) => mcpTools.getLangflowComponentDetails(req, res));
     app.post('/mcp/api/build-flow', (req, res) => mcpTools.buildAndDeployFlow(req, res));
@@ -52,8 +51,6 @@ async function main() {
         res.status(404).json({ success: false, error: err.message });
       }
     });
-    // Add create-flow-from-template endpoint
-    app.post('/mcp/api/create-flow-from-template/:templateId', (req: Request, res: Response) => mcpTools.createFlowFromTemplate(req, res));
   } else {
     console.log('Langflow API integration disabled');
   }

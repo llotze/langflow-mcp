@@ -48,6 +48,30 @@ export class MCPTools {
       const { templateId } = req.params;
       const { name, description } = req.body;
       const template = loadTemplate(templateId);
+
+      // Ensure edge handles are properly encoded for Langflow (no spaces)
+      if (template.data?.edges) {
+        template.data.edges = template.data.edges.map((edge: any) => {
+          function encodeHandle(handle: string) {
+            // Remove spaces after encoding
+            let encoded = handle;
+            if (typeof encoded === 'string' && !encoded.includes('œ')) {
+              try {
+                const obj = JSON.parse(encoded.replace(/œ/g, '"'));
+                encoded = JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
+              } catch {
+                // If not parseable, leave as is
+              }
+            }
+            // Remove all spaces
+            return typeof encoded === 'string' ? encoded.replace(/\s+/g, '') : encoded;
+          }
+          if (edge.sourceHandle) edge.sourceHandle = encodeHandle(edge.sourceHandle);
+          if (edge.targetHandle) edge.targetHandle = encodeHandle(edge.targetHandle);
+          return edge;
+        });
+      }
+
       const flow = await this.langflowApi!.createFlow({
         name: name || template.name,
         description: description || template.description,
@@ -60,67 +84,43 @@ export class MCPTools {
     }
   }
 
-  // --- 4. Tweak Template and Create Flow ---
-  public async tweakTemplate(req: any, res: any): Promise<void> {
+  // --- 4. Tweak Flow ---
+  public async tweakFlow(req: any, res: any): Promise<void> {
     try {
-      const { templateId } = req.params;
+      const { flowId } = req.params;
       const { tweaks, newName, newDescription } = req.body;
-      const template = loadTemplate(templateId);
-
+      const flow = await this.langflowApi!.getFlow(flowId);
+      if (!flow) {
+        res.status(404).json({ error: 'Flow not found' });
+        return;
+      }
       // Apply tweaks
       if (tweaks && typeof tweaks === 'object') {
         for (const [nodeId, params] of Object.entries(tweaks)) {
-          const node = template.data.nodes.find((n: any) => n.id === nodeId);
+          const node = flow.data.nodes.find((n: any) => n.id === nodeId);
           if (node && node.data?.node?.template) {
             Object.assign(node.data.node.template, params);
           }
         }
       }
       // Optionally update name/description
-      if (newName) template.name = newName;
-      if (newDescription) template.description = newDescription;
-
-      // Create a new flow in Langflow using the tweaked template
-      const flow = await this.langflowApi!.createFlow({
-        name: template.name,
-        description: template.description,
-        data: template.data,
-        tags: template.tags,
-      });
-      res.json({ success: true, flow });
+      if (newName) flow.name = newName;
+      if (newDescription) flow.description = newDescription;
+      // Update flow in Langflow
+      const updated = await this.langflowApi!.updateFlow(flowId, flow);
+      res.json({ success: true, flow: updated });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   }
 
-  // --- 5. Run Template With Tweaks ---
-  public async runTemplateWithTweaks(req: any, res: any): Promise<void> {
+  // --- 5. Run Flow ---
+  public async runFlow(req: any, res: any): Promise<void> {
     try {
-      const { templateId } = req.params;
-      const { tweaks, input } = req.body;
-      const template = loadTemplate(templateId);
-
-      // Apply tweaks to template data
-      if (tweaks && typeof tweaks === 'object') {
-        for (const [nodeId, params] of Object.entries(tweaks)) {
-          const node = template.data.nodes.find((n: any) => n.id === nodeId);
-          if (node && node.data?.node?.template) {
-            Object.assign(node.data.node.template, params);
-          }
-        }
-      }
-
-      // Create a temporary flow in Langflow
-      const flow = await this.langflowApi!.createFlow({
-        name: `${template.name} (Run)`,
-        description: template.description,
-        data: template.data,
-        tags: template.tags,
-      });
-
-      // Run the flow with provided input
-      const result = await this.langflowApi!.runFlow(flow.id, input || {});
-      res.json({ success: true, flow_id: flow.id, outputs: result.outputs });
+      const { flowId } = req.params;
+      const { input } = req.body;
+      const result = await this.langflowApi!.runFlow(flowId, input || {});
+      res.json({ success: true, flow_id: flowId, outputs: result.outputs });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
