@@ -174,6 +174,19 @@ async function main() {
           },
           required: ['name', 'nodes', 'connections']
         }
+      },
+      {
+        name: 'create_flow_from_template',
+        description: 'Create a flow from a template by templateId',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            templateId: { type: 'string', description: 'Template ID' },
+            name: { type: 'string', description: 'Flow name' },
+            description: { type: 'string', description: 'Flow description' }
+          },
+          required: ['templateId']
+        }
       }
     ],
   }));
@@ -292,6 +305,16 @@ async function main() {
               }, null, 2)
             }]
           };
+        }
+        case 'create_flow_from_template': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { templateId: args.templateId }, body: args };
+          let result: any;
+          await mcpTools.createFlowFromTemplate(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
         default:
           return {
