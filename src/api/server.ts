@@ -37,6 +37,8 @@ async function main() {
     app.post('/mcp/api/run-flow/:flowId', (req: Request, res: Response) => mcpTools.runFlow(req, res));
     app.get('/mcp/api/search', (req, res) => mcpTools.searchLangflowComponents(req, res));
     app.get('/mcp/api/components/:componentName', (req, res) => mcpTools.getLangflowComponentDetails(req, res));
+    app.get('/mcp/api/component-essentials/:componentName', (req, res) => mcpTools.getComponentEssentials(req, res));
+    app.get('/mcp/api/search-component-properties/:componentName', (req, res) => mcpTools.searchComponentProperties(req, res));
     app.post('/mcp/api/build-flow', (req, res) => mcpTools.buildAndDeployFlow(req, res));
     app.post('/mcp/api/test-flow', (req, res) => mcpTools.createMinimalTestFlow(req, res));
     app.get('/mcp/langflow/flows/:flowId', async (req, res) => {

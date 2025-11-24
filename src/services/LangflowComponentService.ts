@@ -6,6 +6,28 @@ export interface ComponentCatalog {
   };
 }
 
+function extractParametersFromTemplate(template: Record<string, any>): any[] {
+  return Object.entries(template)
+    .filter(([key, value]) => typeof value === 'object' && value.name)
+    .map(([key, value]) => ({
+      name: value.name,
+      display_name: value.display_name,
+      type: value.type,
+      required: value.required || false,
+      default: value.value,
+      description: value.info || value.description,
+      options: value.options,
+      placeholder: value.placeholder,
+      password: value.password,
+      multiline: value.multiline,
+      file_types: value.fileTypes,
+      input_types: value.input_types,
+      load_from_db: value.load_from_db,
+      advanced: value.advanced,
+      show: value.show,
+    }));
+}
+
 export class LangflowComponentService {
   constructor(private apiClient: LangflowApiService) {}
 
@@ -22,14 +44,14 @@ export class LangflowComponentService {
    */
   async getComponentTemplate(componentName: string): Promise<any> {
     const catalog = await this.getAllComponents();
-    
-    // Navigate catalog to find component
     for (const category in catalog) {
       if (catalog[category][componentName]) {
-        return catalog[category][componentName];
+        const component = catalog[category][componentName];
+        // Extract parameters from template
+        component.parameters = extractParametersFromTemplate(component.template);
+        return component;
       }
     }
-    
     throw new Error(`Component ${componentName} not found in Langflow`);
   }
 

@@ -12,7 +12,8 @@
     "start:mcp": "node dist/api/mcp-server.js",
     "test:api-first": "tsx scripts/test-api-first.ts",
     "test:flow-diff": "tsx scripts/test-flowdiff-validator.ts",
-    "test:template-tools": "tsx scripts/test-template-tools.ts"
+    "test:template-tools": "tsx scripts/test-template-tools.ts",
+    "test:component-tools": "tsx scripts/test-component-tools.ts"
   },
   "keywords": [
     "langflow",

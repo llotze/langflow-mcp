@@ -248,4 +248,71 @@ export class MCPTools {
       }
     });
   }
+
+  /**
+   * Get essentials for a Langflow component
+   */
+  public async getComponentEssentials(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { componentName } = req.params;
+    try {
+      const component = await this.componentService.getComponentTemplate(componentName);
+      // Extract essentials
+      const essentials = {
+        componentName: component.name,
+        displayName: component.display_name,
+        description: component.description,
+        requiredParameters: (component.parameters || []).filter((p: any) => p.required),
+        commonParameters: (component.parameters || []).filter((p: any) => !p.advanced).slice(0, 5),
+        examples: {}, 
+        metadata: {
+          totalParameters: (component.parameters || []).length,
+        }
+      };
+      res.json({ success: true, data: essentials });
+    } catch (err: any) {
+      res.status(404).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Search properties in a Langflow component
+   */
+  public async searchComponentProperties(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { componentName } = req.params;
+    const { query } = req.query;
+    try {
+      const component = await this.componentService.getComponentTemplate(componentName);
+      const matches = searchComponentParams(component.parameters || [], query);
+      res.json({
+        success: true,
+        data: {
+          componentName: component.name,
+          query,
+          matches,
+          totalMatches: matches.length,
+          searchedIn: (component.parameters || []).length
+        }
+      });
+    } catch (err: any) {
+      res.status(404).json({ success: false, error: err.message });
+    }
+  }
+}
+
+// Helper for recursive property search
+export function searchComponentParams(parameters: any[], query: string) {
+  const queryLower = query.toLowerCase();
+  return parameters.filter(p =>
+    (p.name && p.name.toLowerCase().includes(queryLower)) ||
+    (p.display_name && p.display_name.toLowerCase().includes(queryLower)) ||
+    (p.description && p.description.toLowerCase().includes(queryLower))
+  );
 }

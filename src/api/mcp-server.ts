@@ -118,6 +118,29 @@ async function main() {
         }
       },
       {
+        name: 'get_component_essentials',
+        description: 'Get only the most important properties and examples for a component',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            componentName: { type: 'string', description: 'Component name (e.g., "OpenAIModel")' }
+          },
+          required: ['componentName']
+        }
+      },
+      {
+        name: 'search_component_properties',
+        description: 'Search for properties in a component by keyword',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            componentName: { type: 'string', description: 'Component name (e.g., "OpenAIModel")' },
+            query: { type: 'string', description: 'Search term for property name or description' }
+          },
+          required: ['componentName', 'query']
+        }
+      },
+      {
         name: 'build_and_deploy_flow',
         description: 'Build a flow from component specifications and deploy',
         inputSchema: {
@@ -231,6 +254,26 @@ async function main() {
           return {
             content: [{ type: 'text', text: JSON.stringify(template, null, 2) }]
           };
+        }
+        case 'get_component_essentials': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { componentName: args.componentName } };
+          let result: any;
+          await mcpTools.getComponentEssentials(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        case 'search_component_properties': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { componentName: args.componentName }, query: { query: args.query } };
+          let result: any;
+          await mcpTools.searchComponentProperties(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
         case 'build_and_deploy_flow': {
           const deployed = await flowBuilder.buildAndDeployFlow(
