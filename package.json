@@ -10,8 +10,10 @@
     "build": "tsc",
     "start": "node dist/api/server.js",
     "start:mcp": "node dist/api/mcp-server.js",
-    "test:mcp": "npm run build && tsx scripts/test-mcp.ts",
-    "test:flow-building": "tsx scripts/test-flow-building.ts"
+    "test:api-first": "tsx scripts/test-api-first.ts",
+    "test:flow-diff": "tsx scripts/test-flowdiff-validator.ts",
+    "test:template-tools": "tsx scripts/test-template-tools.ts",
+    "test:component-tools": "tsx scripts/test-component-tools.ts"
   },
   "keywords": [
     "langflow",
@@ -24,15 +26,18 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.5",
-    "@types/node": "^24.10.0",
+    "@types/node": "^24.10.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
+    "@xyflow/react": "^12.9.2",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.1",
-    "express": "^5.1.0"
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "process": "^0.11.10"
   }
 }

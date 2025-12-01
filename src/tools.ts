@@ -1,350 +1,349 @@
-import { Request, Response } from 'express';
-import { ComponentRegistry } from './core/registry.js'; 
-import { ComponentSearchQuery, MCPToolResponse, FlowDiffOperation, LangflowFlow, FlowNode, FlowEdge } from './types.js';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LangflowApiService } from './services/langflowApiService.js';
+import { LangflowComponentService } from './services/LangflowComponentService.js';
+import { LangflowFlowBuilder } from './services/LangflowFlowBuilder.js';
+import type { LangflowComponent } from './types.js';
+import { listTemplates, loadTemplate } from './utils/templateLoader.js';
+import { FlowDiffEngine } from './services/flowDiffEngine.js';
+import { FlowValidator } from './services/flowValidator.js';
+
+// Helper to flatten nested component catalog
+function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent> {
+  const flat: Record<string, LangflowComponent> = {};
+  for (const category in catalog) {
+    for (const name in catalog[category]) {
+      flat[name] = catalog[category][name];
+    }
+  }
+  return flat;
+}
 
 export class MCPTools {
-  private registry: ComponentRegistry;
-  private templatesPath: string;
-
-  constructor(registry: ComponentRegistry, templatesPath: string) {
-    this.registry = registry;
-    this.templatesPath = templatesPath;
-  }
-
-  /**
-   * List all components
-   */
-  public async listComponents(req: Request, res: Response): Promise<void> {
+  // --- 1. Search Templates ---
+  public async searchTemplates(req: any, res: any): Promise<void> {
     try {
-      const components = await this.registry.getAllComponents();
-      const response: MCPToolResponse = {
-        success: true,
-        data: components,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to list components');
-    }
-  }
+      const { keyword, tags, page = 1, pageSize = 20 } = req.query;
+      let templates = listTemplates();
 
-  /**
-   * Search components
-   */
-  public async searchComponents(req: Request, res: Response): Promise<void> {
-    try {
-      const query: ComponentSearchQuery = req.body;
-      const components = await this.registry.searchComponents(query);
-      const response: MCPToolResponse = {
-        success: true,
-        data: components,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to search components');
-    }
-  }
-
-  /**
-   * Get component essentials (common/required properties only)
-   */
-  public async getComponentEssentials(req: Request, res: Response): Promise<void> {
-    try {
-      const { name } = req.params;
-      const component = await this.registry.getComponent(name);
-
-      if (!component) {
-        res.status(404).json({
-          success: false,
-          error: 'Component not found',
-        });
-        return;
+      if (keyword) {
+        const kw = keyword.toLowerCase();
+        templates = templates.filter(t =>
+          t.name.toLowerCase().includes(kw) ||
+          t.description.toLowerCase().includes(kw)
+        );
       }
-
-      // Extract only essential/common properties
-      const essentials = {
-        name: component.name,
-        display_name: component.display_name,
-        description: component.description,
-        category: component.category,
-        tool_mode: component.tool_mode,
-        required_parameters: component.parameters.filter(p => p.required),
-        common_parameters: component.parameters.filter(p => !p.required).slice(0, 5),
-        input_types: component.input_types,
-        output_types: component.output_types,
-      };
-
-      const response: MCPToolResponse = {
-        success: true,
-        data: essentials,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to get component essentials');
+      if (tags) {
+        const tagArr = Array.isArray(tags) ? tags : String(tags).split(',');
+        templates = templates.filter(t =>
+          t.tags && tagArr.some((tag: string) => t.tags.includes(tag))
+        );
+      }
+      const start = (page - 1) * pageSize;
+      const paged = templates.slice(start, start + pageSize);
+      res.json({ total: templates.length, page, pageSize, results: paged });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   }
 
-  /**
-   * Get component documentation
-   */
-  public async getComponentDocumentation(req: Request, res: Response): Promise<void> {
+  // --- 2. Get Template ---
+  public async getTemplate(req: any, res: any): Promise<void> {
     try {
-      const { name } = req.params;
-      const docs = await this.registry.getComponentDocs(name);
-
-      if (!docs) {
-        res.status(404).json({
-          success: false,
-          error: 'Documentation not found',
-        });
-        return;
-      }
-
-      const response: MCPToolResponse = {
-        success: true,
-        data: { documentation: docs },
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to get component documentation');
+      const { templateId } = req.params;
+      const template = loadTemplate(templateId);
+      res.json(template);
+    } catch (err: any) {
+      res.status(404).json({ error: 'Template not found' });
     }
   }
 
-  /**
-   * Validate component configuration
-   */
-  public async validateComponentConfig(req: Request, res: Response): Promise<void> {
+  // --- 3. Create Flow from Template ---
+  public async createFlowFromTemplate(req: any, res: any): Promise<void> {
     try {
-      const { name, config } = req.body;
-      const component = await this.registry.getComponent(name);
+      const { templateId } = req.params;
+      const { name, description } = req.body;
+      const template = loadTemplate(templateId);
 
-      if (!component) {
-        res.status(404).json({
-          success: false,
-          error: 'Component not found',
-        });
-        return;
-      }
-
-      const errors: string[] = [];
-
-      // Check required parameters
-      component.parameters
-        .filter(p => p.required)
-        .forEach(param => {
-          if (!(param.name in config)) {
-            errors.push(`Missing required parameter: ${param.name}`);
+      // Ensure edge handles are properly encoded for Langflow (no spaces)
+      if (template.data?.edges) {
+        template.data.edges = template.data.edges.map((edge: any) => {
+          function encodeHandle(handle: string) {
+            // Remove spaces after encoding
+            let encoded = handle;
+            if (typeof encoded === 'string' && !encoded.includes('œ')) {
+              try {
+                const obj = JSON.parse(encoded.replace(/œ/g, '"'));
+                encoded = JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
+              } catch {
+                // If not parseable, leave as is
+              }
+            }
+            // Remove all spaces
+            return typeof encoded === 'string' ? encoded.replace(/\s+/g, '') : encoded;
           }
+          if (edge.sourceHandle) edge.sourceHandle = encodeHandle(edge.sourceHandle);
+          if (edge.targetHandle) edge.targetHandle = encodeHandle(edge.targetHandle);
+          return edge;
         });
-
-      const response: MCPToolResponse = {
-        success: errors.length === 0,
-        data: {
-          valid: errors.length === 0,
-          errors,
-        },
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to validate component config');
-    }
-  }
-
-  /**
-   * Create a new flow
-   */
-  public async createFlow(req: Request, res: Response): Promise<void> {
-    try {
-      const { name, description, nodes, edges } = req.body;
-
-      const flow: LangflowFlow = {
-        name,
-        description,
-        data: {
-          nodes: nodes || [],
-          edges: edges || [],
-        },
-        tags: [],
-      };
-
-      const response: MCPToolResponse = {
-        success: true,
-        data: flow,
-        message: 'Flow created successfully',
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to create flow');
-    }
-  }
-
-  /**
-   * Update flow with diff operations
-   */
-  public async updateFlowPartial(req: Request, res: Response): Promise<void> {
-    try {
-      const { flow, operations } = req.body as { flow: LangflowFlow; operations: FlowDiffOperation[] };
-
-      let updatedFlow = { ...flow };
-
-      for (const op of operations) {
-        updatedFlow = this.applyFlowOperation(updatedFlow, op);
       }
 
-      const response: MCPToolResponse = {
-        success: true,
-        data: updatedFlow,
-        message: `Applied ${operations.length} operations successfully`,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to update flow');
-    }
-  }
-
-  /**
-   * List flow templates
-   */
-  public async listFlowTemplates(req: Request, res: Response): Promise<void> {
-    try {
-      if (!fs.existsSync(this.templatesPath)) {
-        fs.mkdirSync(this.templatesPath, { recursive: true });
-      }
-
-      const files = fs.readdirSync(this.templatesPath).filter(f => f.endsWith('.json'));
-      const templates = files.map(file => {
-        const content = fs.readFileSync(path.join(this.templatesPath, file), 'utf-8');
-        const data = JSON.parse(content);
-        return {
-          name: data.name || file.replace('.json', ''),
-          description: data.description || '',
-          tags: data.tags || [],
-        };
+      const flow = await this.langflowApi!.createFlow({
+        name: name || template.name,
+        description: description || template.description,
+        data: template.data,
+        tags: template.tags,
       });
-
-      const response: MCPToolResponse = {
-        success: true,
-        data: templates,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to list flow templates');
+      res.json({ success: true, flow });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   }
 
-  /**
-   * Get a specific flow template
-   */
-  public async getFlowTemplate(req: Request, res: Response): Promise<void> {
+  // --- 4. Tweak Flow ---
+  public async tweakFlow(req: any, res: any): Promise<void> {
     try {
-      const { name } = req.params;
-      const templatePath = path.join(this.templatesPath, `${name}.json`);
-
-      if (!fs.existsSync(templatePath)) {
-        res.status(404).json({
-          success: false,
-          error: 'Template not found',
-        });
+      const { flowId } = req.params;
+      const { operations, validateAfter = true, continueOnError = false } = req.body;
+      if (!flowId || !Array.isArray(operations)) {
+        res.status(400).json({ error: 'Missing flowId or operations array' });
         return;
       }
-
-      const content = fs.readFileSync(templatePath, 'utf-8');
-      const template = JSON.parse(content);
-
-      const response: MCPToolResponse = {
-        success: true,
-        data: template,
+      const flow = await this.langflowApi!.getFlow(flowId);
+      if (!flow) {
+        res.status(404).json({ error: 'Flow not found' });
+        return;
+      }
+      // Defensive check for flow structure
+      if (
+        !flow.data ||
+        !Array.isArray(flow.data.nodes) ||
+        !Array.isArray(flow.data.edges)
+      ) {
+        res.status(500).json({ error: 'Flow data is missing nodes or edges array.' });
+        return;
+      }
+      const diffRequest = {
+        flow,
+        operations,
+        validateAfter,
+        continueOnError
       };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to get flow template');
+      const rawCatalog = await this.componentService!.getAllComponents();
+      const componentCatalog = flattenComponentCatalog(rawCatalog);
+      const flowDiffEngine = new FlowDiffEngine(
+        componentCatalog,
+        new FlowValidator(componentCatalog)
+      );
+      const result = await flowDiffEngine.applyDiff(diffRequest);
+      if (!result.success) {
+        res.status(400).json({ success: false, errors: result.errors, warnings: result.warnings });
+        return;
+      }
+      const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
+      res.json({ success: true, flow: updated, operationsApplied: result.operationsApplied, warnings: result.warnings });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   }
 
-  /**
-   * Get all categories
-   */
-  public async getCategories(req: Request, res: Response): Promise<void> {
+  // --- 5. Run Flow ---
+  public async runFlow(req: any, res: any): Promise<void> {
     try {
-      const categories = await this.registry.getCategories();
-      const response: MCPToolResponse = {
-        success: true,
-        data: categories,
-      };
-      res.json(response);
-    } catch (error) {
-      this.handleError(res, error, 'Failed to get categories');
+      const { flowId } = req.params;
+      const { input } = req.body;
+      const result = await this.langflowApi!.runFlow(flowId, input || {});
+      res.json({ success: true, flow_id: flowId, outputs: result.outputs });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  private langflowApi?: LangflowApiService;
+  private componentService?: LangflowComponentService;
+  private flowBuilder?: LangflowFlowBuilder;
+
+  constructor(
+    _unused: any,
+    _unused2: any,
+    langflowApiUrl?: string,
+    langflowApiKey?: string
+  ) {
+    if (langflowApiUrl && langflowApiKey) {
+      this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
+      this.componentService = new LangflowComponentService(this.langflowApi);
+      this.flowBuilder = new LangflowFlowBuilder(this.componentService, this.langflowApi);
     }
   }
 
   /**
-   * Apply a single flow operation
+   *  API-FIRST: Search components from Langflow API
    */
-  private applyFlowOperation(flow: LangflowFlow, op: FlowDiffOperation): LangflowFlow {
-    const updatedFlow = { ...flow };
-
-    switch (op.operation) {
-      case 'addNode':
-        if (op.node) {
-          updatedFlow.data.nodes.push(op.node);
-        }
-        break;
-
-      case 'removeNode':
-        if (op.nodeId) {
-          updatedFlow.data.nodes = updatedFlow.data.nodes.filter(n => n.id !== op.nodeId);
-          updatedFlow.data.edges = updatedFlow.data.edges.filter(
-            e => e.source !== op.nodeId && e.target !== op.nodeId
-          );
-        }
-        break;
-
-      case 'updateNode':
-        if (op.nodeId && op.updates) {
-          const nodeIndex = updatedFlow.data.nodes.findIndex(n => n.id === op.nodeId);
-          if (nodeIndex >= 0) {
-            updatedFlow.data.nodes[nodeIndex] = {
-              ...updatedFlow.data.nodes[nodeIndex],
-              ...op.updates,
-            };
-          }
-        }
-        break;
-
-      case 'addConnection':
-        if (op.edge) {
-          updatedFlow.data.edges.push(op.edge);
-        }
-        break;
-
-      case 'removeConnection':
-        if (op.edge) {
-          updatedFlow.data.edges = updatedFlow.data.edges.filter(
-            e => !(e.source === op.edge!.source && e.target === op.edge!.target)
-          );
-        }
-        break;
-
-      case 'updateFlowMetadata':
-        if (op.metadata) {
-          updatedFlow.metadata = { ...updatedFlow.metadata, ...op.metadata };
-        }
-        break;
+  public async searchLangflowComponents(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
     }
-
-    return updatedFlow;
+    const { keyword, limit = 20 } = req.query;
+    if (!keyword || typeof keyword !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing required parameter: keyword' });
+      return;
+    }
+    const results = await this.componentService.searchComponents(keyword, Number(limit));
+    res.json({ success: true, data: results });
   }
 
   /**
-   * Handle errors
+   *  API-FIRST: Get component details from Langflow API
    */
-  private handleError(res: Response, error: any, message: string): void {
-    console.error(message, error);
-    res.status(500).json({
-      success: false,
-      error: message,
-      message: error.message,
+  public async getLangflowComponentDetails(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { componentName } = req.params;
+    const template = await this.componentService.getComponentTemplate(componentName);
+    res.json({ success: true, data: template });
+  }
+
+  /**
+   *  API-FIRST: Build and deploy flow using Langflow API
+   */
+  public async buildAndDeployFlow(req: any, res: any): Promise<void> {
+    if (!this.flowBuilder) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { name, description, nodes, connections } = req.body;
+    if (!name || !nodes || !Array.isArray(nodes)) {
+      res.status(400).json({ success: false, error: 'Missing required fields: name, nodes (array)' });
+      return;
+    }
+    const result = await this.flowBuilder.buildAndDeployFlow(
+      name,
+      description || '',
+      nodes,
+      connections || []
+    );
+    res.json({
+      success: true,
+      data: {
+        flow_id: result.id,
+        url: `${process.env.LANGFLOW_API_URL}/flow/${result.id}`,
+      }
     });
   }
+
+  /**
+   *  API-FIRST: Create minimal test flow
+   */
+  public async createMinimalTestFlow(req: any, res: any): Promise<void> {
+    if (!this.flowBuilder) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const result = await this.flowBuilder.buildAndDeployFlow(
+      'Test Flow - API First',
+      'Minimal chatbot created using API-first approach',
+      [
+        {
+          component: 'ChatInput',
+          id: 'chat_input_1',
+          position: { x: 100, y: 200 },
+          params: {},
+        },
+        {
+          component: 'OpenAIModel',
+          id: 'openai_1',
+          position: { x: 400, y: 200 },
+          params: {
+            api_key: process.env.OPENAI_API_KEY || '',
+            model_name: 'gpt-4o-mini',
+          },
+        },
+        {
+          component: 'ChatOutput',
+          id: 'chat_output_1',
+          position: { x: 700, y: 200 },
+          params: {},
+        },
+      ],
+      [
+        { source: 'chat_input_1', target: 'openai_1', targetParam: 'input_value' },
+        { source: 'openai_1', target: 'chat_output_1', targetParam: 'input_value' },
+      ]
+    );
+    res.json({
+      success: true,
+      data: {
+        flow_id: result.id,
+        url: `${process.env.LANGFLOW_API_URL}/flow/${result.id}`,
+      }
+    });
+  }
+
+  /**
+   * Get essentials for a Langflow component
+   */
+  public async getComponentEssentials(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { componentName } = req.params;
+    try {
+      const component = await this.componentService.getComponentTemplate(componentName);
+      // Extract essentials
+      const essentials = {
+        componentName: component.name,
+        displayName: component.display_name,
+        description: component.description,
+        requiredParameters: (component.parameters || []).filter((p: any) => p.required),
+        commonParameters: (component.parameters || []).filter((p: any) => !p.advanced).slice(0, 5),
+        examples: {}, 
+        metadata: {
+          totalParameters: (component.parameters || []).length,
+        }
+      };
+      res.json({ success: true, data: essentials });
+    } catch (err: any) {
+      res.status(404).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Search properties in a Langflow component
+   */
+  public async searchComponentProperties(req: any, res: any): Promise<void> {
+    if (!this.componentService) {
+      res.status(503).json({ success: false, error: 'Langflow API not configured' });
+      return;
+    }
+    const { componentName } = req.params;
+    const { query } = req.query;
+    try {
+      const component = await this.componentService.getComponentTemplate(componentName);
+      const matches = searchComponentParams(component.parameters || [], query);
+      res.json({
+        success: true,
+        data: {
+          componentName: component.name,
+          query,
+          matches,
+          totalMatches: matches.length,
+          searchedIn: (component.parameters || []).length
+        }
+      });
+    } catch (err: any) {
+      res.status(404).json({ success: false, error: err.message });
+    }
+  }
+}
+
+// Helper for recursive property search
+export function searchComponentParams(parameters: any[], query: string) {
+  const queryLower = query.toLowerCase();
+  return parameters.filter(p =>
+    (p.name && p.name.toLowerCase().includes(queryLower)) ||
+    (p.display_name && p.display_name.toLowerCase().includes(queryLower)) ||
+    (p.description && p.description.toLowerCase().includes(queryLower))
+  );
 }
