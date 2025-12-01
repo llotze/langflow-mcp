@@ -1,7 +1,21 @@
 import { LangflowApiService } from './services/langflowApiService.js';
 import { LangflowComponentService } from './services/LangflowComponentService.js';
 import { LangflowFlowBuilder } from './services/LangflowFlowBuilder.js';
+import type { LangflowComponent } from './types.js';
 import { listTemplates, loadTemplate } from './utils/templateLoader.js';
+import { FlowDiffEngine } from './services/flowDiffEngine.js';
+import { FlowValidator } from './services/flowValidator.js';
+
+// Helper to flatten nested component catalog
+function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent> {
+  const flat: Record<string, LangflowComponent> = {};
+  for (const category in catalog) {
+    for (const name in catalog[category]) {
+      flat[name] = catalog[category][name];
+    }
+  }
+  return flat;
+}
 
 export class MCPTools {
   // --- 1. Search Templates ---
@@ -88,27 +102,44 @@ export class MCPTools {
   public async tweakFlow(req: any, res: any): Promise<void> {
     try {
       const { flowId } = req.params;
-      const { tweaks, newName, newDescription } = req.body;
+      const { operations, validateAfter = true, continueOnError = false } = req.body;
+      if (!flowId || !Array.isArray(operations)) {
+        res.status(400).json({ error: 'Missing flowId or operations array' });
+        return;
+      }
       const flow = await this.langflowApi!.getFlow(flowId);
       if (!flow) {
         res.status(404).json({ error: 'Flow not found' });
         return;
       }
-      // Apply tweaks
-      if (tweaks && typeof tweaks === 'object') {
-        for (const [nodeId, params] of Object.entries(tweaks)) {
-          const node = flow.data.nodes.find((n: any) => n.id === nodeId);
-          if (node && node.data?.node?.template) {
-            Object.assign(node.data.node.template, params);
-          }
-        }
+      // Defensive check for flow structure
+      if (
+        !flow.data ||
+        !Array.isArray(flow.data.nodes) ||
+        !Array.isArray(flow.data.edges)
+      ) {
+        res.status(500).json({ error: 'Flow data is missing nodes or edges array.' });
+        return;
       }
-      // Optionally update name/description
-      if (newName) flow.name = newName;
-      if (newDescription) flow.description = newDescription;
-      // Update flow in Langflow
-      const updated = await this.langflowApi!.updateFlow(flowId, flow);
-      res.json({ success: true, flow: updated });
+      const diffRequest = {
+        flow,
+        operations,
+        validateAfter,
+        continueOnError
+      };
+      const rawCatalog = await this.componentService!.getAllComponents();
+      const componentCatalog = flattenComponentCatalog(rawCatalog);
+      const flowDiffEngine = new FlowDiffEngine(
+        componentCatalog,
+        new FlowValidator(componentCatalog)
+      );
+      const result = await flowDiffEngine.applyDiff(diffRequest);
+      if (!result.success) {
+        res.status(400).json({ success: false, errors: result.errors, warnings: result.warnings });
+        return;
+      }
+      const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
+      res.json({ success: true, flow: updated, operationsApplied: result.operationsApplied, warnings: result.warnings });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

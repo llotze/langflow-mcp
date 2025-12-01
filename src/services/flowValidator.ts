@@ -197,8 +197,10 @@ export class FlowValidator {
     const issues: ValidationIssue[] = [];
     const template = node.data?.node?.template || {};
 
-    // Check required parameters
-    component.parameters.forEach((param) => {
+    // Defensive: Ensure parameters is an array
+    const parameters = Array.isArray(component.parameters) ? component.parameters : [];
+
+    parameters.forEach((param) => {
       // A parameter is only truly required if:
       // 1. It's explicitly marked as required=true, AND
       // 2. It doesn't have a default value (including empty string defaults)

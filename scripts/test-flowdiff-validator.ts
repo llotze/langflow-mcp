@@ -3,135 +3,114 @@ import { FlowValidator } from '../src/services/flowValidator.js';
 import { FlowDiffEngine } from '../src/services/flowDiffEngine.js';
 import { AddNodeOperation, RemoveNodeOperation } from '../src/types/flowDiff.js';
 
-// Dummy catalog for testing
-const componentCatalog: Record<string, LangflowComponent> = {
-  OpenAIModel: {
-    name: 'OpenAIModel',
-    display_name: 'OpenAI',
-    description: 'Generates text using OpenAI LLMs.',
-    category: 'openai',
-    parameters: [
-      { name: 'model_name', type: 'string', required: true, default: 'gpt-4o-mini' },
-      { name: 'api_key', type: 'string', required: true, default: 'OPENAI_API_KEY', password: true },
-    ],
-    base_classes: [],
-    output_types: [],
-  },
-  File: {
-    name: 'File',
-    display_name: 'File',
-    description: 'File node',
-    category: 'utility',
-    parameters: [],
-    base_classes: [],
-    output_types: [],
-  },
-};
+import axios from 'axios';
 
-// Helper functions for concise output
-function printValidationResult(label: string, result: any) {
-  const errors = result.issues.filter((i: any) => i.severity === 'error');
+// Set your MCP API base URL
+const BASE_URL = process.env.LANGFLOW_MCP_URL || 'http://localhost:3001';
+
+// Helper for concise output
+function printResult(label: string, result: any) {
   console.log(`\n=== ${label} ===`);
-  if (errors.length === 0) {
-    console.log('✅ No errors');
+  if (result.success) {
+    console.log('✅ Success');
+    if (result.flow) {
+      console.log(`Nodes: ${result.flow.data.nodes.length}, Edges: ${result.flow.data.edges.length}`);
+    }
+    if (result.operationsApplied !== undefined) {
+      console.log(`Operations Applied: ${result.operationsApplied}`);
+    }
+    if (result.warnings && result.warnings.length > 0) {
+      console.log('Warnings:');
+      result.warnings.forEach((w: any) => console.log(`- ${w}`));
+    }
   } else {
-    console.log('❌ Errors:');
-    errors.forEach((e: any) => {
-      console.log(`- [${e.nodeId || ''}] ${e.message}`);
-    });
+    console.log('❌ Failed');
+    if (result.errors && result.errors.length > 0) {
+      result.errors.forEach((e: any) => console.log(`- ${e}`));
+    }
   }
-  console.log(`Nodes: ${result.summary.totalNodes}, Edges: ${result.summary.totalEdges}, Errors: ${result.summary.errors}`);
 }
 
-function printDiffResult(label: string, result: any) {
-  console.log(`\n=== ${label} ===`);
-  if (result.errors && result.errors.length > 0) {
-    console.log('❌ Errors:');
-    result.errors.forEach((e: any) => console.log(`- ${e}`));
-  } else {
-    console.log('✅ No errors');
+async function getFirstComponent() {
+  // Get a list of components using the search endpoint
+  const res = await axios.get(`${BASE_URL}/mcp/api/search?keyword=a`);
+  const catalog = res.data.data;
+  for (const category in catalog) {
+    const components = catalog[category];
+    for (const name in components) {
+      return components[name];
+    }
   }
-  console.log(`Nodes: ${result.flow.data.nodes.length}, Edges: ${result.flow.data.edges.length}, Ops: ${result.operationsApplied}`);
+  throw new Error('No components found in catalog');
 }
 
 // Main test
 async function main() {
-  const validator = new FlowValidator(componentCatalog);
-  const diffEngine = new FlowDiffEngine(componentCatalog, validator);
+  // 1. Create a minimal flow for testing
+  const createRes = await axios.post(`${BASE_URL}/mcp/api/test-flow`, {});
+  const flowId = createRes.data.data.flow_id;
+  console.log(`Created test flow: ${flowId}`);
 
-  // Initial flow
-  const flow: LangflowFlow = {
-    name: 'Test Flow',
-    description: 'A minimal flow for testing',
-    data: {
-      nodes: [
-        {
-          id: 'model1',
-          type: 'OpenAIModel',
-          position: { x: 100, y: 100 },
-          data: {
-            id: 'model1',
-            type: 'OpenAIModel',
-            node: {
-              template: { model_name: 'gpt-4o-mini', api_key: 'OPENAI_API_KEY' },
-              display_name: 'OpenAIModel',
-              description: '',
-              base_classes: [],
-              outputs: [],
-            },
-          },
-        },
-      ],
-      edges: [],
-    },
-  };
+  // 2. Get a valid component from the catalog
+  const component = await getFirstComponent();
 
-  // Validate initial flow
-  const validation = await validator.validateFlow(flow);
-  printValidationResult('Initial Validation', validation);
-
-  // Add a node
-  const addNodeOp: AddNodeOperation = {
+  // 3. Tweak flow: Add a node using the fetched component
+  const addNodeOp = {
     type: 'addNode',
     node: {
-      id: 'file1',
-      type: 'File',
+      id: 'test_node_1',
+      type: component.name,
       position: { x: 250, y: 200 },
       data: {
-        id: 'file1',
-        type: 'File',
+        id: 'test_node_1',
+        type: component.name,
         node: {
-          template: {},
-          display_name: 'File',
-          description: '',
-          base_classes: [],
+          template: {}, // You can fill with default params if needed
+          display_name: component.display_name,
+          description: component.description,
+          base_classes: component.base_classes || [],
           outputs: [],
         },
       },
     },
   };
-  const diffResult = await diffEngine.applyDiff({
-    flow,
+  const tweakRes1 = await axios.post(`${BASE_URL}/mcp/api/tweak-flow/${flowId}`, {
     operations: [addNodeOp],
     validateAfter: true,
   });
-  printDiffResult('AddNode Operation', diffResult);
+  printResult('AddNode Operation', tweakRes1.data);
 
-  // Remove a node
-  const removeNodeOp: RemoveNodeOperation = {
+  // 4. Tweak flow: Remove a node
+  const removeNodeOp = {
     type: 'removeNode',
-    nodeId: 'model1',
+    nodeId: 'chat_input_1', // Remove the ChatInput node
   };
-  const diffResult2 = await diffEngine.applyDiff({
-    flow: diffResult.flow,
+  const tweakRes2 = await axios.post(`${BASE_URL}/mcp/api/tweak-flow/${flowId}`, {
     operations: [removeNodeOp],
     validateAfter: true,
   });
-  printDiffResult('RemoveNode Operation', diffResult2);
+  printResult('RemoveNode Operation', tweakRes2.data);
 
-  // Final validation
-  const finalValidation = await validator.validateFlow(diffResult2.flow);
-  printValidationResult('Final Validation', finalValidation);
+  // 5. Tweak flow: Update a node parameter
+  const updateNodeOp = {
+    type: 'updateNode',
+    nodeId: 'openai_1',
+    updates: {
+      template: { temperature: 0.7 },
+    },
+    merge: true,
+  };
+  const tweakRes3 = await axios.post(`${BASE_URL}/mcp/api/tweak-flow/${flowId}`, {
+    operations: [updateNodeOp],
+    validateAfter: true,
+  });
+  printResult('UpdateNode Operation', tweakRes3.data);
+
+  // 6. Validate the final flow
+  const validateRes = await axios.get(`${BASE_URL}/mcp/api/validate-flow/${flowId}`);
+  printResult('Final Validation', validateRes.data);
+
+  console.log('\nAll flow diff/refactor tests completed.');
 }
 
 main().catch(err => {

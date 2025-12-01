@@ -17,13 +17,13 @@ export interface BaseOperation {
 export interface AddNodeOperation extends BaseOperation {
   type: 'addNode';
   node: FlowNode;
-  position?: { x: number; y: number }; // Override node's position
+  position?: { x: number; y: number };
 }
 
 export interface RemoveNodeOperation extends BaseOperation {
   type: 'removeNode';
   nodeId: string;
-  removeConnections?: boolean; // Default: true
+  removeConnections?: boolean;
 }
 
 export interface UpdateNodeOperation extends BaseOperation {
@@ -31,10 +31,10 @@ export interface UpdateNodeOperation extends BaseOperation {
   nodeId: string;
   updates: {
     position?: { x: number; y: number };
-    template?: Record<string, any>; // Partial template updates
+    template?: Record<string, any>;
     displayName?: string;
   };
-  merge?: boolean; // Default: true (merge with existing, don't replace)
+  merge?: boolean;
 }
 
 export interface MoveNodeOperation extends BaseOperation {
@@ -46,7 +46,7 @@ export interface MoveNodeOperation extends BaseOperation {
 export interface AddEdgeOperation extends BaseOperation {
   type: 'addEdge';
   edge: FlowEdge;
-  validateConnection?: boolean; // Default: true
+  validateConnection?: boolean;
 }
 
 export interface RemoveEdgeOperation extends BaseOperation {
@@ -78,18 +78,18 @@ export type FlowDiffOperation =
 
 export interface FlowDiffResult {
   success: boolean;
-  flow?: any; // Updated flow
+  flow?: any;
   operationsApplied: number;
-  applied: number[]; // Indices of successful operations
-  failed: number[]; // Indices of failed operations
+  applied: number[];
+  failed: number[];
   errors: string[];
   warnings: string[];
 }
 
 export interface FlowDiffRequest {
-  flowId?: string; // For retrieving existing flow
-  flow?: any; // Or provide flow directly
+  flowId?: string;
+  flow?: any;
   operations: FlowDiffOperation[];
-  validateAfter?: boolean; // Default: true
-  continueOnError?: boolean; // Default: false
+  validateAfter?: boolean;
+  continueOnError?: boolean;
 }

@@ -7,6 +7,7 @@ export interface ComponentCatalog {
 }
 
 function extractParametersFromTemplate(template: Record<string, any>): any[] {
+  if (!template || typeof template !== 'object') return [];
   return Object.entries(template)
     .filter(([key, value]) => typeof value === 'object' && value.name)
     .map(([key, value]) => ({

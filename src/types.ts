@@ -32,7 +32,6 @@ export type FlowNode = Node<{
   showNode?: boolean;
 }>;
 
-// Use ReactFlow's Edge type 
 export type FlowEdge = Edge<{
   sourceHandle: any;
   targetHandle: any;
@@ -56,6 +55,8 @@ export interface LangflowComponent {
   frozen?: boolean;
   field_order?: string[];
 }
+
+export type FlatComponentCatalog = Record<string, LangflowComponent>;
 
 export interface ComponentParameter {
   name: string;
