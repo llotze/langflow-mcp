@@ -17,24 +17,36 @@ export interface BaseOperation {
   description?: string;
 }
 
-export interface AddNodeOperation extends BaseOperation {
+/**
+ * Adds a node using complete FlowNode structure.
+ * Use for custom components, imports, or when you need full control.
+ */
+export interface AddFullNodeOperation extends BaseOperation {
   type: 'addNode';
-  
-  // Option 1: Full FlowNode (original behavior)
-  node?: FlowNode;
-  
-  // Option 2: Simplified schema (user-friendly)
-  nodeId?: string;
-  component?: string;
-  params?: Record<string, any>;
-  
+  node: FlowNode;
   position?: { x: number; y: number };
 }
+
+/**
+ * Adds a node using simplified schema (recommended).
+ * Automatically constructs node from component catalog.
+ */
+export interface AddSimplifiedNodeOperation extends BaseOperation {
+  type: 'addNode';
+  nodeId: string;
+  component: string;
+  params?: Record<string, any>;
+  position?: { x: number; y: number };
+}
+
+/**
+ * Union of both node addition schemas.
+ */
+export type AddNodeOperation = AddFullNodeOperation | AddSimplifiedNodeOperation;
 
 export interface RemoveNodeOperation extends BaseOperation {
   type: 'removeNode';
   nodeId: string;
-  /** If true, also removes all edges connected to this node (default: true) */
   removeConnections?: boolean;
 }
 
@@ -46,7 +58,6 @@ export interface UpdateNodeOperation extends BaseOperation {
     template?: Record<string, any>;
     displayName?: string;
   };
-  /** If true, deep merges updates with existing data (default: false) */
   merge?: boolean;
 }
 
@@ -56,22 +67,34 @@ export interface MoveNodeOperation extends BaseOperation {
   position: { x: number; y: number };
 }
 
-export interface AddEdgeOperation extends BaseOperation {
+/**
+ * Adds an edge using complete FlowEdge structure.
+ * Use for imports or when you need precise handle control.
+ */
+export interface AddFullEdgeOperation extends BaseOperation {
   type: 'addEdge';
-  
-  // Option 1: Full FlowEdge (original)
-  edge?: FlowEdge;
-  
-  // Option 2: Simplified schema (user-friendly)
-  source?: string;
-  target?: string;
-  sourceHandle?: string;
-  targetHandle?: string;
-  targetParam?: string;  // Langflow convenience field
-  
-  /** If true, validates connection compatibility (default: true) */
+  edge: FlowEdge;
   validateConnection?: boolean;
 }
+
+/**
+ * Adds an edge using simplified schema (recommended).
+ * Automatically constructs handles from node metadata.
+ */
+export interface AddSimplifiedEdgeOperation extends BaseOperation {
+  type: 'addEdge';
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  targetParam?: string;
+  validateConnection?: boolean;
+}
+
+/**
+ * Union of both edge addition schemas.
+ */
+export type AddEdgeOperation = AddFullEdgeOperation | AddSimplifiedEdgeOperation;
 
 export interface RemoveEdgeOperation extends BaseOperation {
   type: 'removeEdge';
@@ -117,13 +140,9 @@ export interface FlowDiffResult {
  * Request to apply operations to a flow.
  */
 export interface FlowDiffRequest {
-  /** Flow UUID to modify (mutually exclusive with flow) */
   flowId?: string;
-  /** Flow object to modify (mutually exclusive with flowId) */
   flow?: any;
   operations: FlowDiffOperation[];
-  /** Validate flow after operations (default: true) */
   validateAfter?: boolean;
-  /** Continue on operation failure (default: false) */
   continueOnError?: boolean;
 }

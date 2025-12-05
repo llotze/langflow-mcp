@@ -4,10 +4,14 @@ import {
   FlowDiffRequest,
   FlowDiffResult,
   AddNodeOperation,
+  AddSimplifiedNodeOperation,
+  AddFullNodeOperation,
   RemoveNodeOperation,
   UpdateNodeOperation,
   MoveNodeOperation,
   AddEdgeOperation,
+  AddSimplifiedEdgeOperation,
+  AddFullEdgeOperation,
   RemoveEdgeOperation,
   UpdateMetadataOperation,
 } from '../types/flowDiff.js';
@@ -26,6 +30,34 @@ export class FlowDiffEngine {
     private componentCatalog: Record<string, LangflowComponent>,
     private validator: FlowValidator
   ) {}
+
+  /**
+   * Type guard to check if operation uses simplified node schema.
+   */
+  private isSimplifiedNodeOp(op: AddNodeOperation): op is AddSimplifiedNodeOperation {
+    return 'nodeId' in op && 'component' in op;
+  }
+
+  /**
+   * Type guard to check if operation uses full node schema.
+   */
+  private isFullNodeOp(op: AddNodeOperation): op is AddFullNodeOperation {
+    return 'node' in op;
+  }
+
+  /**
+   * Type guard to check if operation uses simplified edge schema.
+   */
+  private isSimplifiedEdgeOp(op: AddEdgeOperation): op is AddSimplifiedEdgeOperation {
+    return 'source' in op && 'target' in op && !('edge' in op);
+  }
+
+  /**
+   * Type guard to check if operation uses full edge schema.
+   */
+  private isFullEdgeOp(op: AddEdgeOperation): op is AddFullEdgeOperation {
+    return 'edge' in op;
+  }
 
   /**
    * Applies operations with pre-validation and rollback on failure.
@@ -227,13 +259,8 @@ export class FlowDiffEngine {
    * @param operation - Simplified addNode operation with component name and params
    * @returns Complete FlowNode ready for insertion into flow
    */
-  private async buildNodeFromOperation(operation: any): Promise<FlowNode> {
+  private async buildNodeFromOperation(operation: AddSimplifiedNodeOperation): Promise<FlowNode> {
     const { nodeId, component, params = {}, position = { x: 0, y: 0 } } = operation;
-    
-    // Validate required fields
-    if (!nodeId || !component) {
-      throw new Error('addNode requires nodeId and component fields');
-    }
     
     // Get component template from catalog
     const componentDef = this.componentCatalog[component];
@@ -256,11 +283,11 @@ export class FlowDiffEngine {
     // Construct complete FlowNode matching Langflow's structure
     const node: FlowNode = {
       id: nodeId,
-      type: 'genericNode',  // All nodes use genericNode as the React Flow type
+      type: 'genericNode',
       position,
       data: {
         id: nodeId,
-        type: component,  // This is the Langflow component type
+        type: component,
         node: {
           template,
           display_name: componentDef.display_name || component,
@@ -284,24 +311,35 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Adds a new node to the flow.
+   * Adds a new node to the flow with full type safety.
    * 
-   * Now supports both:
-   * 1. Full FlowNode objects (original behavior)
-   * 2. Simplified schemas with nodeId, component, params (new)
+   * Supports both simplified and full schemas via type guards.
+   * Simplified schema automatically constructs node from catalog.
+   * Full schema uses provided node object directly.
    */
-  private async applyAddNode(flow: LangflowFlow, op: any): Promise<LangflowFlow> {
-    // Check if this is a simplified schema
-    if (op.nodeId && op.component && !op.node) {
-      // Build FlowNode from simplified schema
-      op.node = await this.buildNodeFromOperation(op);
-    }
-    
-    const { node, position } = op;
+  private async applyAddNode(
+    flow: LangflowFlow, 
+    op: AddNodeOperation
+  ): Promise<LangflowFlow> {
+    let node: FlowNode;
+    let position: { x: number; y: number } | undefined;
 
-    // Validate node object
-    if (!node || !node.id) {
-      throw new Error('addNode requires a valid node object with an id field');
+    // Use type guards to determine schema and get proper typing
+    if (this.isSimplifiedNodeOp(op)) {
+      // TypeScript now knows op has nodeId, component, params
+      node = await this.buildNodeFromOperation(op);
+      position = op.position;
+    } else if (this.isFullNodeOp(op)) {
+      // TypeScript now knows op has node
+      node = op.node;
+      position = op.position;
+    } else {
+      throw new Error('addNode requires either full node object or simplified schema (nodeId + component)');
+    }
+
+    // Validate node structure
+    if (!node.id) {
+      throw new Error('Node must have an id field');
     }
 
     // Check for duplicate ID
@@ -309,7 +347,6 @@ export class FlowDiffEngine {
       throw new Error(`Node with ID "${node.id}" already exists`);
     }
 
-    // Validate node structure
     if (!node.type) {
       throw new Error(`Node type is required for node "${node.id}"`);
     }
@@ -322,7 +359,7 @@ export class FlowDiffEngine {
       throw new Error(`Node data.type (component type) is required for node "${node.id}"`);
     }
 
-    // Apply position override if provided (for backward compatibility)
+    // Apply position override if provided
     const newNode = { ...node };
     if (position && position.x !== undefined && position.y !== undefined) {
       newNode.position = position;
@@ -384,14 +421,13 @@ export class FlowDiffEngine {
       
       for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
         if (node.data.node.template[fieldName]) {
-          // Unwrap nested value objects (e.g., {value: 0.7} -> 0.7)
+          // Unwrap nested value objects
           let actualValue = fieldValue;
           if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
             actualValue = (fieldValue as any).value;
             console.log(`Unwrapped nested value for ${fieldName}: ${JSON.stringify(fieldValue)} -> ${actualValue}`);
           }
           
-          // Save for later application during reconstruction
           templateUpdates[fieldName] = actualValue;
           node.data.node.template[fieldName].value = actualValue;
           console.log(`Updated ${fieldName} = ${actualValue} (type: ${typeof actualValue})`);
@@ -407,7 +443,6 @@ export class FlowDiffEngine {
 
     /**
      * Deep merge utility for combining nested objects.
-     * Handles type mismatches gracefully and skips null/undefined values.
      */
     const deepMerge = (target: any, source: any): any => {
       if (!source || typeof source !== 'object') return source;
@@ -445,45 +480,29 @@ export class FlowDiffEngine {
       Object.assign(node.data, op.updates);
     }
 
-    /**
-     * Reconstruct node from component catalog to ensure structural integrity.
-     * 
-     * This critical step:
-     * 1. Creates a fresh template from the component catalog
-     * 2. Applies saved template updates (highest priority)
-     * 3. Preserves existing user values for unchanged fields
-     * 
-     * By iterating over the NEW template (not the old one), we ensure
-     * all fields from the component catalog are processed, preventing
-     * updates from being silently ignored due to missing fields.
-     */
+    // Reconstruct node from component catalog
     const componentType = node.data?.type;
     if (componentType && this.componentCatalog[componentType]) {
       const componentTemplate = this.componentCatalog[componentType];
       const nodeTemplate = JSON.parse(JSON.stringify(componentTemplate.template || {}));
       
       if (node.data.node?.template && nodeTemplate) {
-        // CRITICAL: Iterate over the NEW template, not the old one
-        // This ensures all fields from the component catalog are processed
+        // Iterate over the NEW template to ensure all fields are processed
         for (const fieldName in nodeTemplate) {
           if (templateUpdates.hasOwnProperty(fieldName)) {
-            // Apply saved updates first (highest priority)
             nodeTemplate[fieldName].value = templateUpdates[fieldName];
             console.log(`Applied saved update for ${fieldName}: ${templateUpdates[fieldName]}`);
           } else if (node.data.node?.template?.[fieldName]?.value !== undefined) {
-            // Preserve existing values for unchanged fields
             nodeTemplate[fieldName].value = node.data.node.template[fieldName].value;
           }
         }
       }
       
-      // Reconstruct node with updated template
       node.data.node = {
         ...componentTemplate,
         template: nodeTemplate
       };
       
-      // Remove redundant properties
       delete (node.data.node as any).type;
       delete (node.data.node as any).name;
     }
@@ -507,25 +526,21 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Adds a connection (edge) between two nodes.
+   * Adds a connection (edge) between two nodes with full type safety.
    * 
-   * Supports two schemas:
-   * 1. Simplified schema with source/target node IDs (recommended)
-   * 2. Full FlowEdge object with complete handle specifications (advanced)
-   * 
-   * For simplified schemas, handles are constructed automatically using:
-   * - Existing edges as templates (most reliable, copies proven handles)
-   * - Node output/input metadata from component catalog (fallback)
-   * - Langflow's custom JSON format with special character encoding
-   * 
-   * This hybrid approach maximizes reliability while maintaining flexibility
-   * for complex edge configurations.
+   * Supports both simplified and full schemas via type guards.
+   * Simplified schema automatically constructs handles using hybrid strategy.
+   * Full schema uses provided edge object directly.
    */
-  private applyAddEdge(flow: LangflowFlow, op: any): LangflowFlow {
+  private applyAddEdge(
+    flow: LangflowFlow, 
+    op: AddEdgeOperation
+  ): LangflowFlow {
     let edge: FlowEdge;
 
-    // Check if this is a simplified schema
-    if (op.source && op.target && !op.edge) {
+    // Use type guards to determine schema and get proper typing
+    if (this.isSimplifiedEdgeOp(op)) {
+      // TypeScript now knows op has source, target, etc.
       const sourceNode = flow.data.nodes.find((n: FlowNode) => n.id === op.source);
       const targetNode = flow.data.nodes.find((n: FlowNode) => n.id === op.target);
       
@@ -597,10 +612,11 @@ export class FlowDiffEngine {
         }
       };
 
-    } else if (op.edge) {
+    } else if (this.isFullEdgeOp(op)) {
+      // TypeScript now knows op has edge
       edge = op.edge;
     } else {
-      throw new Error('addEdge requires either edge object or source/target fields');
+      throw new Error('addEdge requires either full edge object or simplified schema (source + target)');
     }
 
     // Validate source and target exist
@@ -638,10 +654,6 @@ export class FlowDiffEngine {
    * (double quotes become "œ"). The handle contains metadata about the
    * source node's output including data type, output name, and type compatibility.
    * 
-   * If a simple handle name is provided, it's used to find the matching
-   * output from the node's output definitions. Otherwise, the first or
-   * selected output is used.
-   * 
    * @param sourceNode - Source node with output definitions
    * @param providedHandle - Optional output name or pre-formatted handle
    * @returns Properly formatted handle string for Langflow
@@ -652,7 +664,6 @@ export class FlowDiffEngine {
       return providedHandle;
     }
 
-    // Get node outputs
     const outputs = sourceNode.data?.node?.outputs || [];
     
     // If providedHandle is a simple name, find matching output
@@ -669,7 +680,6 @@ export class FlowDiffEngine {
     }
     
     if (selectedOutput && selectedOutput.name) {
-      // Construct handle in Langflow's format
       return JSON.stringify({
         dataType: sourceNode.data?.type,
         id: sourceNode.id,
@@ -691,13 +701,6 @@ export class FlowDiffEngine {
   /**
    * Constructs target handle in Langflow's custom format.
    * 
-   * Target handles encode the destination parameter information including
-   * field name, accepted input types, and parameter type. This metadata
-   * enables Langflow's connection validation in the UI.
-   * 
-   * The handle is constructed from the node's template field definition,
-   * ensuring type compatibility information is preserved.
-   * 
    * @param targetNode - Target node with template definitions
    * @param targetParam - Parameter name to connect to
    * @returns Properly formatted handle string for Langflow
@@ -707,7 +710,6 @@ export class FlowDiffEngine {
     
     if (template && template[targetParam]) {
       const field = template[targetParam];
-      // Construct handle in Langflow's format
       return JSON.stringify({
         fieldName: targetParam,
         id: targetNode.id,
@@ -727,9 +729,6 @@ export class FlowDiffEngine {
 
   /**
    * Removes a connection between two nodes.
-   * 
-   * If handles are not specified, removes the first matching edge
-   * between the source and target nodes.
    */
   private applyRemoveEdge(flow: LangflowFlow, op: RemoveEdgeOperation): LangflowFlow {
     const { source, target, sourceHandle, targetHandle } = op;
@@ -751,10 +750,7 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Updates flow-level metadata such as name, description, tags.
-   * 
-   * Only specified fields are updated; others remain unchanged.
-   * Custom metadata is merged, not replaced.
+   * Updates flow-level metadata.
    */
   private applyUpdateMetadata(
     flow: LangflowFlow,
@@ -794,15 +790,6 @@ export class FlowDiffEngine {
   /**
    * Validates an operation before applying it.
    * 
-   * Performs pre-flight checks including:
-   * - Node and edge existence in the flow
-   * - Component type validity against catalog
-   * - Required field presence and correctness
-   * - Type compatibility and structural requirements
-   * 
-   * Returns validation issues categorized by severity. Errors prevent
-   * operation application, while warnings are informational.
-   * 
    * @param operation - Operation to validate
    * @param flow - Current flow state
    * @returns Array of validation issues
@@ -815,34 +802,16 @@ export class FlowDiffEngine {
 
     switch (operation.type) {
       case 'addNode': {
-        const op = operation as any;
+        const op = operation as AddNodeOperation;
         
-        // Determine which schema is being used
-        const nodeId = op.nodeId || op.node?.id;
-        const componentType = op.component || op.node?.data?.type;
+        let nodeId: string;
+        let componentType: string | undefined;
         
-        if (!nodeId) {
-          issues.push({
-            severity: 'error',
-            message: 'addNode requires either nodeId or node.id',
-            fix: 'Set nodeId: "your-node-id" or provide a complete node object'
-          });
-          break;
-        }
-        
-        // Check for duplicate ID
-        if (flow.data.nodes.some(n => n.id === nodeId)) {
-          issues.push({
-            severity: 'error',
-            nodeId,
-            message: `Cannot add node: ID "${nodeId}" already exists`,
-            fix: 'Use a unique node ID'
-          });
-        }
-
-        // ✅ ONLY validate component catalog for simplified schema
-        if (op.nodeId && op.component && !op.node) {
-          // Simplified schema - check catalog
+        if (this.isSimplifiedNodeOp(op)) {
+          nodeId = op.nodeId;
+          componentType = op.component;
+          
+          // Validate component exists in catalog
           if (!this.componentCatalog[op.component]) {
             issues.push({
               severity: 'error',
@@ -851,16 +820,11 @@ export class FlowDiffEngine {
               fix: 'Use search_components to find valid component names'
             });
           }
-        } else if (op.nodeId && !op.component && !op.node) {
-          // Simplified schema but missing component
-          issues.push({
-            severity: 'error',
-            nodeId: op.nodeId,
-            message: 'Simplified addNode requires both nodeId and component fields',
-            fix: 'Add component: "ComponentName" to the operation'
-          });
-        } else if (op.node) {
-          // ✅ Full node object - validate structure only
+        } else if (this.isFullNodeOp(op)) {
+          nodeId = op.node.id;
+          componentType = op.node.data?.type;
+          
+          // Validate full node structure
           if (!op.node.type) {
             issues.push({
               severity: 'error',
@@ -885,7 +849,23 @@ export class FlowDiffEngine {
               fix: 'Add data: { type: "ComponentName", ... }'
             });
           }
-          // ✅ Don't check catalog - full node provides complete structure
+        } else {
+          issues.push({
+            severity: 'error',
+            message: 'addNode requires either nodeId+component or complete node object',
+            fix: 'Provide nodeId and component, or a full FlowNode object'
+          });
+          break;
+        }
+        
+        // Check for duplicate ID
+        if (flow.data.nodes.some(n => n.id === nodeId)) {
+          issues.push({
+            severity: 'error',
+            nodeId,
+            message: `Cannot add node: ID "${nodeId}" already exists`,
+            fix: 'Use a unique node ID'
+          });
         }
         
         break;
@@ -894,7 +874,6 @@ export class FlowDiffEngine {
       case 'updateNode': {
         const op = operation as UpdateNodeOperation;
         
-        // Check node exists
         const node = flow.data.nodes.find(n => n.id === op.nodeId);
         if (!node) {
           issues.push({
@@ -906,7 +885,6 @@ export class FlowDiffEngine {
           return issues;
         }
 
-        // Check component type exists in catalog
         const componentType = node.data?.type;
         if (componentType && !this.componentCatalog[componentType]) {
           issues.push({
@@ -917,7 +895,6 @@ export class FlowDiffEngine {
           });
         }
 
-        // Validate template updates
         if (op.updates.template && componentType && this.componentCatalog[componentType]) {
           const component = this.componentCatalog[componentType];
           const validFields = new Set(Object.keys(component.template || {}));
@@ -939,7 +916,6 @@ export class FlowDiffEngine {
       case 'removeNode': {
         const op = operation as RemoveNodeOperation;
         
-        // Check node exists
         if (!flow.data.nodes.some(n => n.id === op.nodeId)) {
           issues.push({
             severity: 'error',
@@ -950,7 +926,6 @@ export class FlowDiffEngine {
           return issues;
         }
 
-        // Check for dependent nodes (if not removing connections)
         if (!op.removeConnections) {
           const dependents = flow.data.edges.filter(e => e.source === op.nodeId);
           if (dependents.length > 0) {
@@ -967,22 +942,26 @@ export class FlowDiffEngine {
       }
 
       case 'addEdge': {
-        const op = operation as any;
+        const op = operation as AddEdgeOperation;
         
-        // Determine which schema is being used
-        const source = op.source || op.edge?.source;
-        const target = op.target || op.edge?.target;
+        let source: string;
+        let target: string;
         
-        if (!source || !target) {
+        if (this.isSimplifiedEdgeOp(op)) {
+          source = op.source;
+          target = op.target;
+        } else if (this.isFullEdgeOp(op)) {
+          source = op.edge.source;
+          target = op.edge.target;
+        } else {
           issues.push({
             severity: 'error',
-            message: 'addEdge requires either edge object or source/target fields',
-            fix: 'Set source: "node_id" and target: "node_id"'
+            message: 'addEdge requires either source+target or complete edge object',
+            fix: 'Provide source and target node IDs, or a full FlowEdge object'
           });
           break;
         }
         
-        // Check source node exists
         if (!flow.data.nodes.some(n => n.id === source)) {
           issues.push({
             severity: 'error',
@@ -991,7 +970,6 @@ export class FlowDiffEngine {
           });
         }
 
-        // Check target node exists
         if (!flow.data.nodes.some(n => n.id === target)) {
           issues.push({
             severity: 'error',
@@ -1000,7 +978,6 @@ export class FlowDiffEngine {
           });
         }
 
-        // Check for self-loop
         if (source === target) {
           issues.push({
             severity: 'error',
@@ -1009,15 +986,9 @@ export class FlowDiffEngine {
           });
         }
 
-        // Check for duplicate edge (approximate check for simplified schema)
-        const sourceHandle = op.sourceHandle || op.edge?.sourceHandle;
-        const targetHandle = op.targetHandle || op.edge?.targetHandle;
-        
         const duplicate = flow.data.edges.some(e =>
           e.source === source &&
-          e.target === target &&
-          (!sourceHandle || e.sourceHandle === sourceHandle) &&
-          (!targetHandle || e.targetHandle === targetHandle)
+          e.target === target
         );
         
         if (duplicate) {
@@ -1033,7 +1004,6 @@ export class FlowDiffEngine {
       case 'removeEdge': {
         const op = operation as RemoveEdgeOperation;
         
-        // Check edge exists
         const edgeExists = flow.data.edges.some(e =>
           e.source === op.source &&
           e.target === op.target &&
@@ -1054,7 +1024,6 @@ export class FlowDiffEngine {
       case 'moveNode': {
         const op = operation as MoveNodeOperation;
         
-        // Check node exists
         if (!flow.data.nodes.some(n => n.id === op.nodeId)) {
           issues.push({
             severity: 'error',
@@ -1064,7 +1033,6 @@ export class FlowDiffEngine {
           });
         }
 
-        // Validate position
         if (typeof op.position.x !== 'number' || typeof op.position.y !== 'number') {
           issues.push({
             severity: 'error',
