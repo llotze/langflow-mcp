@@ -92,7 +92,14 @@ export class MCPTools {
         data: template.data,
         tags: template.tags,
       });
-      res.json({ success: true, flow });
+      
+      // ✅ ONLY return minimal info
+      res.json({ 
+        success: true, 
+        flowId: flow.id,
+        name: flow.name,
+        message: `Flow created successfully. ID: ${flow.id}`
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -106,6 +113,19 @@ export class MCPTools {
       console.log("Translated tweakFlow request:", translated);
       const { flowId, operations, validateAfter = true, continueOnError = false } = translated;
       
+      // ✅ ADD: Pre-process operations to unwrap nested values
+      for (const op of operations) {
+        if (op.type === 'updateNode' && op.updates?.template) {
+          for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
+            // If value is wrapped in {value: X}, unwrap it
+            if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
+              console.log(`Pre-unwrapping ${fieldName}: ${JSON.stringify(fieldValue)} -> ${(fieldValue as any).value}`);
+              op.updates.template[fieldName] = (fieldValue as any).value;
+            }
+          }
+        }
+      }
+
       if (!flowId || !Array.isArray(operations) || operations.length === 0) {
         res.status(400).json({
           error: "Missing flowId or operations array. Only 'operations' is supported. Example:",
@@ -200,7 +220,16 @@ export class MCPTools {
       }
       
       const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
-      res.json({ success: true, flow: updated, operationsApplied: result.operationsApplied, warnings: result.warnings });
+      
+      // ✅ ONLY return minimal info
+      res.json({ 
+        success: true, 
+        flowId: updated.id,
+        name: updated.name,
+        operationsApplied: result.operationsApplied, 
+        warnings: result.warnings,
+        message: `Flow ${updated.id} updated successfully with ${result.operationsApplied} operations`
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -212,9 +241,28 @@ export class MCPTools {
       const { flowId } = req.params;
       const { input } = req.body;
       const result = await this.langflowApi!.runFlow(flowId, input || {});
-      res.json({ success: true, flow_id: flowId, outputs: result.outputs });
+      
+      // ✅ ONLY return minimal info
+      res.json({ 
+        success: true, 
+        flowId: flowId,
+        outputCount: result.outputs?.length || 0,
+        message: `Flow ${flowId} executed successfully`
+        // outputs: result.outputs  // ❌ Remove this to avoid large responses
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- Get Flow Details (when you actually need them) ---
+  public async getFlowDetails(req: any, res: any): Promise<void> {
+    try {
+      const { flowId } = req.params;
+      const flow = await this.langflowApi!.getFlow(flowId);
+      res.json({ success: true, flow });
+    } catch (err: any) {
+      res.status(404).json({ error: 'Flow not found' });
     }
   }
 

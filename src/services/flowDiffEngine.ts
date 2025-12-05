@@ -19,9 +19,6 @@ export class FlowDiffEngine {
     private validator: FlowValidator
   ) {}
 
-  /**
-   * Apply a series of diff operations to a flow
-   */
   async applyDiff(request: FlowDiffRequest): Promise<FlowDiffResult> {
     const result: FlowDiffResult = {
       success: true,
@@ -33,7 +30,6 @@ export class FlowDiffEngine {
       warnings: [],
     };
 
-    // Validate flow exists
     if (!result.flow) {
       return {
         ...result,
@@ -50,7 +46,6 @@ export class FlowDiffEngine {
       nodesIsArray: Array.isArray(request.flow?.data?.nodes)
     });
 
-    // Apply each operation sequentially
     for (let i = 0; i < request.operations.length; i++) {
       const operation = request.operations[i];
       
@@ -64,7 +59,6 @@ export class FlowDiffEngine {
           `Operation ${i} (${operation.type}): ${error.message}`
         );
         
-        // Stop on first error unless continueOnError
         if (!request.continueOnError) {
           result.success = false;
           break;
@@ -72,7 +66,6 @@ export class FlowDiffEngine {
       }
     }
 
-    // Validate final flow if requested
     if (request.validateAfter !== false && result.success) {
       console.log("FlowDiffEngine: Starting validation. Nodes:", result.flow.data.nodes.length);
       const validation = await this.validator.validateFlow(result.flow);
@@ -88,7 +81,6 @@ export class FlowDiffEngine {
         );
       }
       
-      // Add warnings
       validation.issues
         .filter(i => i.severity === 'warning')
         .forEach(i => result.warnings.push(i.message));
@@ -105,9 +97,6 @@ export class FlowDiffEngine {
     return result;
   }
 
-  /**
-   * Apply a single operation
-   */
   private async applyOperation(
     flow: LangflowFlow,
     operation: FlowDiffOperation
@@ -132,29 +121,22 @@ export class FlowDiffEngine {
     }
   }
 
-  /**
-   * Add a node to the flow
-   */
   private applyAddNode(flow: LangflowFlow, op: AddNodeOperation): LangflowFlow {
     const { node, position } = op;
 
-    // Validate node ID is unique
     if (flow.data.nodes.some(n => n.id === node.id)) {
       throw new Error(`Node with ID "${node.id}" already exists`);
     }
 
-    // Validate node type exists
     if (!node.type) {
       throw new Error(`Node type is required for node "${node.id}"`);
     }
 
-    // Validate component exists
     const component = this.componentCatalog[node.type];
     if (!component) {
       throw new Error(`Unknown component type: "${node.type}"`);
     }
 
-    // Clone and add node
     const newNode = { ...node };
     if (position) {
       newNode.position = position;
@@ -164,22 +146,16 @@ export class FlowDiffEngine {
     return flow;
   }
 
-  /**
-   * Remove a node from the flow
-   */
   private applyRemoveNode(flow: LangflowFlow, op: RemoveNodeOperation): LangflowFlow {
     const { nodeId, removeConnections = true } = op;
 
-    // Find node index
     const nodeIndex = flow.data.nodes.findIndex(n => n.id === nodeId);
     if (nodeIndex === -1) {
       throw new Error(`Node "${nodeId}" not found`);
     }
 
-    // Remove node
     flow.data.nodes.splice(nodeIndex, 1);
 
-    // Remove connected edges if requested
     if (removeConnections) {
       flow.data.edges = flow.data.edges.filter(
         e => e.source !== nodeId && e.target !== nodeId
@@ -189,112 +165,100 @@ export class FlowDiffEngine {
     return flow;
   }
 
-  /**
-   * Update node properties
-   */
   private applyUpdateNode(flow: LangflowFlow, op: UpdateNodeOperation): LangflowFlow {
-    const { nodeId, updates, merge = true } = op;
-
-    // Find node
-    const node = flow.data.nodes.find(n => n.id === nodeId);
+    const node = flow.data.nodes.find((n: FlowNode) => n.id === op.nodeId);
     if (!node) {
-      throw new Error(`Node "${nodeId}" not found`);
+      throw new Error(`Node ${op.nodeId} not found in flow`);
     }
 
-    // --- FIX: Defensive reconstruction of node.data.node if missing ---
-    if (!node.data.node) {
-      if (!node.type) {
-        throw new Error(`Node "${nodeId}" is missing a "type" property`);
-      }
-      const component = this.componentCatalog[node.type];
-      if (component) {
-        // ✅ Deep clone template to avoid mutations
-        const clonedTemplate = JSON.parse(JSON.stringify(component.template || {}));
-        
-        node.data.node = {
-          template: clonedTemplate,
-          display_name: component.display_name,
-          description: component.description,
-          base_classes: component.base_classes || [],
-          outputs: component.outputs ? JSON.parse(JSON.stringify(component.outputs)) : [],
-          icon: component.icon,
-          beta: component.beta,
-          legacy: component.legacy,
-          frozen: component.frozen,
-          tool_mode: component.tool_mode,
-          edited: false,
-          pinned: false,
-          minimized: false,
-          field_order: component.field_order || [],
-          conditional_paths: component.conditional_paths || [],
-          custom_fields: component.custom_fields || {},
-          metadata: component.metadata || {},
-          documentation: component.documentation,
-          lf_version: component.lf_version,
-          output_types: component.output_types || [],
-        };
-        
-        // ✅ Ensure no "type" or "name" fields leak in
-        delete (node.data.node as any).type;
-        delete (node.data.node as any).name;
-      } else {
-        throw new Error(`Component type "${node.type}" not found in catalog`);
-      }
-    }
-
-    // Apply position update
-    if (updates.position) {
-      node.position = updates.position;
-    }
-
-    // Apply template updates - FIX: Preserve ALL field metadata
-    if (updates.template) {
-      for (const [key, value] of Object.entries(updates.template)) {
-        const existingField = node.data.node.template[key];
-        
-        if (!existingField) {
-          // Field doesn't exist - try to get structure from component catalog
-          const componentType = node.type || node.data?.type;
-          const component = componentType ? this.componentCatalog[componentType] : undefined;
-          
-          if (component?.template?.[key]) {
-            // ✅ Clone the FULL field structure from catalog
-            node.data.node.template[key] = JSON.parse(JSON.stringify(component.template[key]));
-            // Then update only the value
-            if (typeof node.data.node.template[key] === 'object' && node.data.node.template[key] !== null) {
-              node.data.node.template[key].value = value;
-            } else {
-              node.data.node.template[key] = value;
-            }
-          } else {
-            // ❌ Unknown field - warn and skip to avoid breaking render
-            console.warn(`Cannot update unknown field "${key}" for node ${nodeId} (type: ${componentType}). Skipping.`);
-            continue;
+    const templateUpdates: Record<string, any> = {};
+    
+    if (op.updates.template && node.data?.node?.template) {
+      console.log(`Merging template updates for ${op.nodeId}`);
+      
+      for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
+        if (node.data.node.template[fieldName]) {
+          let actualValue = fieldValue;
+          if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
+            actualValue = (fieldValue as any).value;
+            console.log(`Unwrapped nested value for ${fieldName}: ${JSON.stringify(fieldValue)} -> ${actualValue}`);
           }
-        } else if (typeof existingField === 'object' && existingField !== null && 'value' in existingField) {
-          // Field exists with .value property - preserve ALL metadata, only update value
-          node.data.node.template[key] = {
-            ...existingField,  // ✅ Keep _input_type, display_name, advanced, etc.
-            value: value        // ✅ Update only the value
-          };
+          
+          templateUpdates[fieldName] = actualValue;
+          node.data.node.template[fieldName].value = actualValue;
+          console.log(`Updated ${fieldName} = ${actualValue} (type: ${typeof actualValue})`);
         } else {
-          // Field exists but is not an object with .value - replace entirely
-          node.data.node.template[key] = value;
+          console.warn(`Field ${fieldName} not found in component template`);
         }
       }
+      
+      const { template, ...otherUpdates } = op.updates;
+      op.updates = otherUpdates;
     }
 
-    // Apply display name update
-    if (updates.displayName) {
-      node.data.node.display_name = updates.displayName;
+    const deepMerge = (target: any, source: any): any => {
+      if (!source || typeof source !== 'object') return source;
+      if (!target || typeof target !== 'object') return source;
+      
+      const result = { ...target };
+      
+      for (const key in source) {
+        if (source[key] === null || source[key] === undefined) {
+          continue;
+        }
+        
+        if (typeof source[key] !== 'object' || source[key] === null) {
+          if (target[key] !== undefined && typeof target[key] === 'object' && typeof source[key] !== 'object') {
+            console.warn(`Type mismatch for ${key}: target is object, source is ${typeof source[key]}. Skipping.`);
+            continue;
+          }
+          result[key] = source[key];
+        } 
+        else if (typeof target[key] === 'object' && target[key] !== null) {
+          result[key] = deepMerge(target[key], source[key]);
+        } 
+        else {
+          result[key] = source[key];
+        }
+      }
+      
+      return result;
+    };
+
+    if (op.merge && node.data) {
+      node.data = deepMerge(node.data, op.updates);
+    } else {
+      Object.assign(node.data, op.updates);
+    }
+
+    const componentType = node.data?.type;
+    if (componentType && this.componentCatalog[componentType]) {
+      const componentTemplate = this.componentCatalog[componentType];
+      const nodeTemplate = JSON.parse(JSON.stringify(componentTemplate.template || {}));
+      
+      if (node.data.node?.template && nodeTemplate) {
+        for (const fieldName in nodeTemplate) {
+          if (templateUpdates.hasOwnProperty(fieldName)) {
+            nodeTemplate[fieldName].value = templateUpdates[fieldName];
+            console.log(`Applied saved update for ${fieldName}: ${templateUpdates[fieldName]}`);
+          } else if (node.data.node?.template?.[fieldName]?.value !== undefined) {
+            nodeTemplate[fieldName].value = node.data.node.template[fieldName].value;
+          }
+        }
+      }
+      
+      node.data.node = {
+        ...componentTemplate,
+        template: nodeTemplate
+      };
+      
+      delete (node.data.node as any).type;
+      delete (node.data.node as any).name;
     }
 
     return flow;
   }
 
-  /**
-   * Move a node to new position
-   */
   private applyMoveNode(flow: LangflowFlow, op: MoveNodeOperation): LangflowFlow {
     const { nodeId, position } = op;
 
@@ -307,13 +271,9 @@ export class FlowDiffEngine {
     return flow;
   }
 
-  /**
-   * Add an edge to the flow
-   */
   private applyAddEdge(flow: LangflowFlow, op: AddEdgeOperation): LangflowFlow {
     const { edge, validateConnection = true } = op;
 
-    // Validate nodes exist
     const sourceExists = flow.data.nodes.some(n => n.id === edge.source);
     const targetExists = flow.data.nodes.some(n => n.id === edge.target);
 
@@ -324,7 +284,6 @@ export class FlowDiffEngine {
       throw new Error(`Target node "${edge.target}" not found`);
     }
 
-    // Check for duplicate edge
     const duplicate = flow.data.edges.some(
       e =>
         e.source === edge.source &&
@@ -339,18 +298,13 @@ export class FlowDiffEngine {
       );
     }
 
-    // Add edge
     flow.data.edges.push(edge);
     return flow;
   }
 
-  /**
-   * Remove an edge from the flow
-   */
   private applyRemoveEdge(flow: LangflowFlow, op: RemoveEdgeOperation): LangflowFlow {
     const { source, target, sourceHandle, targetHandle } = op;
 
-    // Find edge index
     const edgeIndex = flow.data.edges.findIndex(
       e =>
         e.source === source &&
@@ -363,14 +317,10 @@ export class FlowDiffEngine {
       throw new Error(`Edge from "${source}" to "${target}" not found`);
     }
 
-    // Remove edge
     flow.data.edges.splice(edgeIndex, 1);
     return flow;
   }
 
-  /**
-   * Update flow metadata
-   */
   private applyUpdateMetadata(
     flow: LangflowFlow,
     op: UpdateMetadataOperation
@@ -399,9 +349,6 @@ export class FlowDiffEngine {
     return flow;
   }
 
-  /**
-   * Deep clone a flow
-   */
   private cloneFlow(flow: LangflowFlow): LangflowFlow {
     return JSON.parse(JSON.stringify(flow));
   }

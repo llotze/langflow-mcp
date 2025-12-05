@@ -97,6 +97,17 @@ async function main() {
         }
       },
       {
+        name: 'get_flow_details',
+        description: 'Get complete flow structure and configuration by flowId (WARNING: returns large payload - use sparingly)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { type: 'string', description: 'Flow ID to retrieve' }
+          },
+          required: ['flowId']
+        }
+      },
+      {
         name: 'search_components',
         description: 'Search for available components by keyword',
         inputSchema: {
@@ -252,6 +263,16 @@ async function main() {
           const req = { params: { flowId: args.flowId }, body: args };
           let result: any;
           await mcpTools.runFlow(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+        case 'get_flow_details': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { params: { flowId: args.flowId } };
+          let result: any;
+          await mcpTools.getFlowDetails(req, {
             json: (data: any) => { result = data; },
             status: (code: number) => ({ json: (data: any) => { result = data; } })
           });

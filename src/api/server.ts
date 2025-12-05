@@ -6,11 +6,9 @@ async function main() {
   console.log('Starting Langflow MCP Server...');
 
   const config = loadConfig();
-  // Redact API key before logging
   const { langflowApiKey, ...safeConfig } = config;
   console.log('Configuration loaded:', { ...safeConfig, langflowApiKey: langflowApiKey ? '[SET]' : '[NOT SET]' });
 
-  // Pass only API credentials
   const mcpTools = new MCPTools(
     undefined,
     undefined, 
@@ -35,6 +33,9 @@ async function main() {
     app.post('/mcp/api/create-flow-from-template/:templateId', (req: Request, res: Response) => mcpTools.createFlowFromTemplate(req, res));
     app.post('/mcp/api/tweak-flow/:flowId', (req: Request, res: Response) => mcpTools.tweakFlow(req, res));
     app.post('/mcp/api/run-flow/:flowId', (req: Request, res: Response) => mcpTools.runFlow(req, res));
+    
+    app.get('/mcp/api/flow-details/:flowId', (req: Request, res: Response) => mcpTools.getFlowDetails(req, res));
+    
     app.get('/mcp/api/search', (req, res) => mcpTools.searchLangflowComponents(req, res));
     app.get('/mcp/api/components/:componentName', (req, res) => mcpTools.getLangflowComponentDetails(req, res));
     app.get('/mcp/api/component-essentials/:componentName', (req, res) => mcpTools.getComponentEssentials(req, res));
