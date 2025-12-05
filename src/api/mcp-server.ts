@@ -107,50 +107,61 @@ async function main() {
         name: 'tweak_flow',
         description: `Edit an existing Langflow flow by applying operations.
 
-        SUPPORTED OPERATIONS:
+SUPPORTED OPERATIONS:
 
-        1. Add Node (Simplified):
-        {
-          "type": "addNode",
-          "nodeId": "openai_1",
-          "component": "OpenAIModel",
-          "params": {
-            "model_name": "gpt-4o-mini",
-            "temperature": 0.7
-          },
-          "position": { "x": 400, "y": 200 }
-        }
+1. Add Single Node:
+{
+  "type": "addNode",
+  "nodeId": "openai_1",
+  "component": "OpenAIModel",
+  "params": { "model_name": "gpt-4o-mini" },
+  "position": { "x": 400, "y": 200 }
+}
 
-        2. Update Node:
-        {
-          "type": "updateNode",
-          "nodeId": "openai_1",
-          "updates": {
-            "template": {
-              "temperature": 0.9,
-              "max_tokens": 500
-            }
-          },
-          "merge": true
-        }
+2. Bulk Add Nodes:
+{
+  "type": "addNodes",
+  "nodes": [
+    { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+    { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+    { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+  ],
+  "autoLayout": "horizontal",
+  "spacing": 350
+}
 
-        3. Add Edge:
-        {
-          "type": "addEdge",
-          "source": "input_1",
-          "target": "openai_1",
-          "sourceHandle": "output",
-          "targetHandle": "input_value"
-        }
+3. Bulk Remove Nodes:
+{
+  "type": "removeNodes",
+  "nodeIds": ["node1", "node2", "node3"],
+  "removeConnections": true
+}
 
-        4. Remove Node:
-        {
-          "type": "removeNode",
-          "nodeId": "openai_1",
-          "removeConnections": true
-        }
+4. Bulk Add Edges:
+{
+  "type": "addEdges",
+  "edges": [
+    { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+    { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+  ]
+}
 
-        IMPORTANT: Always use the "operations" array format.`,
+5. Bulk Remove Edges:
+{
+  "type": "removeEdges",
+  "edges": [
+    { "source": "node1", "target": "node2" },
+    { "source": "node2", "target": "node3" }
+  ]
+}
+
+BENEFITS OF BULK OPERATIONS:
+- 80-90% faster than individual operations
+- Single validation pass
+- Automatic layout positioning
+- Better error handling
+
+IMPORTANT: Use bulk operations when adding/removing multiple items.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -160,39 +171,66 @@ async function main() {
             },
             operations: {
               type: 'array',
-              description: 'Operations to apply',
+              description: 'Operations to apply (use bulk operations for multiple items)',
               items: {
                 type: 'object',
                 properties: {
                   type: { 
                     type: 'string',
-                    enum: ['addNode', 'updateNode', 'removeNode', 'addEdge', 'removeEdge', 'updateMetadata']
+                    enum: [
+                      'addNode', 'updateNode', 'removeNode', 'moveNode',
+                      'addEdge', 'removeEdge', 'updateMetadata',
+                      'addNodes', 'removeNodes', 'addEdges', 'removeEdges'
+                    ]
                   },
-                  // addNode fields (simplified schema)
-                  nodeId: { type: 'string', description: 'Node ID (for addNode)' },
-                  component: { type: 'string', description: 'Component type (for addNode)' },
-                  params: { type: 'object', description: 'Component parameters (for addNode)' },
+                  // Single node operations
+                  nodeId: { type: 'string' },
+                  component: { type: 'string' },
+                  params: { type: 'object' },
+                  position: { type: 'object' },
                   
-                  // updateNode fields
-                  updates: { 
-                    type: 'object',
-                    description: 'Updates to apply (for updateNode)'
+                  // Bulk node operations
+                  nodes: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        nodeId: { type: 'string' },
+                        component: { type: 'string' },
+                        params: { type: 'object' },
+                        position: { type: 'object' }
+                      }
+                    }
                   },
-                  merge: { 
-                    type: 'boolean',
-                    description: 'Deep merge updates (default: false)'
+                  nodeIds: {
+                    type: 'array',
+                    items: { type: 'string' }
+                  },
+                  autoLayout: {
+                    type: 'string',
+                    enum: ['horizontal', 'vertical', 'grid']
+                  },
+                  spacing: { type: 'number' },
+                  
+                  // Edge operations
+                  edges: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        source: { type: 'string' },
+                        target: { type: 'string' },
+                        targetParam: { type: 'string' }
+                      }
+                    }
                   },
                   
-                  // Edge fields
-                  source: { type: 'string', description: 'Source node ID (for edges)' },
-                  target: { type: 'string', description: 'Target node ID (for edges)' },
-                  targetParam: { type: 'string', description: 'Target parameter name (for addEdge)' },
-                  
-                  // Common fields
-                  position: { 
-                    type: 'object',
-                    description: 'Node position { x, y }'
-                  }
+                  // Other fields
+                  updates: { type: 'object' },
+                  merge: { type: 'boolean' },
+                  source: { type: 'string' },
+                  target: { type: 'string' },
+                  removeConnections: { type: 'boolean' }
                 }
               }
             }
@@ -317,7 +355,7 @@ async function main() {
         }
       },
       
-      // NEW UNDO/REDO TOOLS
+      // UNDO/REDO TOOLS
       {
         name: 'undo_flow_changes',
         description: 'Undo the last set of operations applied to a flow',

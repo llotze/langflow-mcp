@@ -14,6 +14,10 @@ import {
   AddFullEdgeOperation,
   RemoveEdgeOperation,
   UpdateMetadataOperation,
+  AddNodesOperation,
+  RemoveNodesOperation,
+  AddEdgesOperation,
+  RemoveEdgesOperation
 } from '../types/flowDiff.js';
 import { FlowValidator, ValidationResult } from './flowValidator.js';
 import { FlowHistory } from './flowHistory.js';
@@ -252,6 +256,17 @@ export class FlowDiffEngine {
         return this.applyRemoveEdge(flow, operation);
       case 'updateMetadata':
         return this.applyUpdateMetadata(flow, operation);
+      
+      // Bulk operations
+      case 'addNodes':
+        return this.applyAddNodes(flow, operation);
+      case 'removeNodes':
+        return this.applyRemoveNodes(flow, operation);
+      case 'addEdges':
+        return this.applyAddEdges(flow, operation);
+      case 'removeEdges':
+        return this.applyRemoveEdges(flow, operation);
+      
       default:
         throw new Error(`Unknown operation type: ${(operation as any).type}`);
     }
@@ -1056,8 +1071,454 @@ export class FlowDiffEngine {
         // Metadata updates are always valid
         break;
       }
+
+      case 'addNodes': {
+        const op = operation as AddNodesOperation;
+        
+        if (!op.nodes || op.nodes.length === 0) {
+          issues.push({
+            severity: 'error',
+            message: 'addNodes operation requires at least one node specification',
+            fix: 'Provide nodes array with at least one node'
+          });
+          break;
+        }
+
+        for (const nodeSpec of op.nodes) {
+          if (!nodeSpec.nodeId) {
+            issues.push({
+              severity: 'error',
+              message: 'Each node in addNodes must have a nodeId',
+              fix: 'Add nodeId field to all nodes'
+            });
+            continue;
+          }
+
+          if (!nodeSpec.component) {
+            issues.push({
+              severity: 'error',
+              nodeId: nodeSpec.nodeId,
+              message: `Node ${nodeSpec.nodeId} missing component type`,
+              fix: 'Add component field'
+            });
+            continue;
+          }
+
+          if (!this.componentCatalog[nodeSpec.component]) {
+            issues.push({
+              severity: 'error',
+              nodeId: nodeSpec.nodeId,
+              message: `Unknown component type: ${nodeSpec.component}`,
+              fix: 'Use search_components to find valid component names'
+            });
+          }
+
+          if (flow.data.nodes.some(n => n.id === nodeSpec.nodeId)) {
+            issues.push({
+              severity: 'error',
+              nodeId: nodeSpec.nodeId,
+              message: `Node ID ${nodeSpec.nodeId} already exists`,
+              fix: 'Use unique node IDs'
+            });
+          }
+        }
+        break;
+      }
+
+      case 'removeNodes': {
+        const op = operation as RemoveNodesOperation;
+        
+        if (!op.nodeIds || op.nodeIds.length === 0) {
+          issues.push({
+            severity: 'error',
+            message: 'removeNodes operation requires at least one nodeId',
+            fix: 'Provide nodeIds array'
+          });
+          break;
+        }
+
+        const missingNodes = op.nodeIds.filter(
+          id => !flow.data.nodes.some(n => n.id === id)
+        );
+
+        if (missingNodes.length > 0) {
+          issues.push({
+            severity: 'error',
+            message: `Nodes not found: ${missingNodes.join(', ')}`,
+            fix: 'Check node IDs or use get_flow_details'
+          });
+        }
+
+        if (!op.removeConnections) {
+          for (const nodeId of op.nodeIds) {
+            const dependents = flow.data.edges.filter(e => e.source === nodeId);
+            if (dependents.length > 0) {
+              const targetNodes = dependents.map(e => e.target).join(', ');
+              issues.push({
+                severity: 'error',
+                nodeId,
+                message: `Node ${nodeId} has ${dependents.length} dependent connections (${targetNodes})`,
+                fix: 'Set removeConnections: true or remove dependents first'
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'addEdges': {
+        const op = operation as AddEdgesOperation;
+        
+        if (!op.edges || op.edges.length === 0) {
+          issues.push({
+            severity: 'error',
+            message: 'addEdges operation requires at least one edge specification',
+            fix: 'Provide edges array'
+          });
+          break;
+        }
+
+        for (const edgeSpec of op.edges) {
+          if (!edgeSpec.source) {
+            issues.push({
+              severity: 'error',
+              message: 'Each edge must have a source',
+              fix: 'Add source field to all edges'
+            });
+            continue;
+          }
+
+          if (!edgeSpec.target) {
+            issues.push({
+              severity: 'error',
+              message: 'Each edge must have a target',
+              fix: 'Add target field to all edges'
+            });
+            continue;
+          }
+
+          if (!flow.data.nodes.some(n => n.id === edgeSpec.source)) {
+            issues.push({
+              severity: 'error',
+              message: `Source node not found: ${edgeSpec.source}`,
+              fix: 'Add source node first'
+            });
+          }
+
+          if (!flow.data.nodes.some(n => n.id === edgeSpec.target)) {
+            issues.push({
+              severity: 'error',
+              message: `Target node not found: ${edgeSpec.target}`,
+              fix: 'Add target node first'
+            });
+          }
+
+          if (edgeSpec.source === edgeSpec.target) {
+            issues.push({
+              severity: 'error',
+              message: `Node ${edgeSpec.source} cannot connect to itself`,
+              fix: 'Use different source and target'
+            });
+          }
+        }
+        break;
+      }
+
+      case 'removeEdges': {
+        const op = operation as RemoveEdgesOperation;
+        
+        if (!op.edges || op.edges.length === 0) {
+          issues.push({
+            severity: 'error',
+            message: 'removeEdges operation requires at least one edge specification',
+            fix: 'Provide edges array'
+          });
+          break;
+        }
+
+        for (const edgeSpec of op.edges) {
+          if (!edgeSpec.source || !edgeSpec.target) {
+            issues.push({
+              severity: 'error',
+              message: 'Each edge must have source and target',
+              fix: 'Add source and target fields'
+            });
+            continue;
+          }
+
+          const edgeExists = flow.data.edges.some(e =>
+            e.source === edgeSpec.source &&
+            e.target === edgeSpec.target
+          );
+
+          if (!edgeExists) {
+            issues.push({
+              severity: 'warning',
+              message: `No edge from ${edgeSpec.source} to ${edgeSpec.target}`,
+              fix: 'Check source and target IDs'
+            });
+          }
+        }
+        break;
+      }
     }
 
     return issues;
+  }
+
+  /**
+   * Bulk adds multiple nodes with automatic layout.
+   * 
+   * @param flow - Current flow state
+   * @param op - Bulk add operation
+   * @returns Updated flow with all nodes added
+   * 
+   * Benefits:
+   * - Single validation pass for all nodes
+   * - Automatic layout positioning
+   * - Better performance than multiple addNode calls
+   */
+  private async applyAddNodes(
+    flow: LangflowFlow,
+    op: AddNodesOperation
+  ): Promise<LangflowFlow> {
+    const { nodes, autoLayout = 'horizontal', spacing = 350 } = op;
+
+    if (!nodes || nodes.length === 0) {
+      throw new Error('addNodes operation requires at least one node');
+    }
+
+    // Calculate positions based on layout strategy
+    const positions = this.calculateBulkLayout(nodes.length, autoLayout, spacing);
+
+    // Build all nodes in parallel for performance
+    const nodePromises = nodes.map(async (nodeSpec, index) => {
+      const position = nodeSpec.position || positions[index];
+      return this.buildNodeFromOperation({
+        type: 'addNode',
+        nodeId: nodeSpec.nodeId,
+        component: nodeSpec.component,
+        params: nodeSpec.params,
+        position
+      });
+    });
+
+    const newNodes = await Promise.all(nodePromises);
+
+    // Validate all nodes before adding any
+    for (const node of newNodes) {
+      if (flow.data.nodes.some(n => n.id === node.id)) {
+        throw new Error(`Duplicate node ID: ${node.id}`);
+      }
+    }
+
+    // Add all nodes
+    flow.data.nodes.push(...newNodes);
+
+    return flow;
+  }
+
+  /**
+   * Bulk removes multiple nodes.
+   * 
+   * @param flow - Current flow state
+   * @param op - Bulk remove operation
+   * @returns Updated flow with nodes removed
+   */
+  private applyRemoveNodes(
+    flow: LangflowFlow,
+    op: RemoveNodesOperation
+  ): LangflowFlow {
+    const { nodeIds, removeConnections = true } = op;
+
+    if (!nodeIds || nodeIds.length === 0) {
+      throw new Error('removeNodes operation requires at least one nodeId');
+    }
+
+    // Validate all nodes exist
+    const missingNodes = nodeIds.filter(
+      id => !flow.data.nodes.some(n => n.id === id)
+    );
+
+    if (missingNodes.length > 0) {
+      throw new Error(`Nodes not found: ${missingNodes.join(', ')}`);
+    }
+
+    // Remove nodes
+    flow.data.nodes = flow.data.nodes.filter(
+      n => !nodeIds.includes(n.id)
+    );
+
+    // Remove connected edges if requested
+    if (removeConnections) {
+      flow.data.edges = flow.data.edges.filter(
+        e => !nodeIds.includes(e.source) && !nodeIds.includes(e.target)
+      );
+    }
+
+    return flow;
+  }
+
+  /**
+   * Bulk adds multiple edges.
+   * 
+   * @param flow - Current flow state
+   * @param op - Bulk add edges operation
+   * @returns Updated flow with edges added
+   */
+  private async applyAddEdges(
+    flow: LangflowFlow,
+    op: AddEdgesOperation
+  ): Promise<LangflowFlow> {
+    const { edges, validateConnections = true } = op;
+
+    if (!edges || edges.length === 0) {
+      throw new Error('addEdges operation requires at least one edge');
+    }
+
+    // Validate all source/target nodes exist
+    if (validateConnections) {
+      for (const edgeSpec of edges) {
+        const sourceExists = flow.data.nodes.some(n => n.id === edgeSpec.source);
+        const targetExists = flow.data.nodes.some(n => n.id === edgeSpec.target);
+
+        if (!sourceExists) {
+          throw new Error(`Source node not found: ${edgeSpec.source}`);
+        }
+        if (!targetExists) {
+          throw new Error(`Target node not found: ${edgeSpec.target}`);
+        }
+      }
+    }
+
+    // Build all edges
+    const newEdges: FlowEdge[] = [];
+    for (const edgeSpec of edges) {
+      const sourceNode = flow.data.nodes.find(n => n.id === edgeSpec.source)!;
+      const targetNode = flow.data.nodes.find(n => n.id === edgeSpec.target)!;
+
+      const sourceHandle = edgeSpec.sourceHandle || 
+        this.constructSourceHandle(sourceNode);
+      const targetHandle = edgeSpec.targetHandle || 
+        this.constructTargetHandle(targetNode, edgeSpec.targetParam || 'input_value');
+
+      const edge: FlowEdge = {
+        id: `reactflow__edge-${edgeSpec.source}${sourceHandle}-${edgeSpec.target}${targetHandle}`,
+        source: edgeSpec.source,
+        target: edgeSpec.target,
+        sourceHandle,
+        targetHandle,
+        data: {
+          sourceHandle: JSON.parse(sourceHandle.replace(/œ/g, '"')),
+          targetHandle: JSON.parse(targetHandle.replace(/œ/g, '"'))
+        },
+        animated: false,
+        selected: false,
+        className: ''
+      };
+
+      // Check for duplicates
+      const duplicate = flow.data.edges.some(
+        e => e.source === edge.source && 
+             e.target === edge.target && 
+             e.targetHandle === edge.targetHandle
+      );
+
+      if (!duplicate) {
+        newEdges.push(edge);
+      }
+    }
+
+    flow.data.edges.push(...newEdges);
+    return flow;
+  }
+
+  /**
+   * Bulk removes multiple edges.
+   * 
+   * @param flow - Current flow state
+   * @param op - Bulk remove edges operation
+   * @returns Updated flow with edges removed
+   */
+  private applyRemoveEdges(
+    flow: LangflowFlow,
+    op: RemoveEdgesOperation
+  ): LangflowFlow {
+    const { edges } = op;
+
+    if (!edges || edges.length === 0) {
+      throw new Error('removeEdges operation requires at least one edge');
+    }
+
+    // Remove matching edges
+    for (const edgeSpec of edges) {
+      flow.data.edges = flow.data.edges.filter(e => {
+        const matchesSourceTarget = e.source === edgeSpec.source && 
+                                   e.target === edgeSpec.target;
+        
+        if (!matchesSourceTarget) return true;
+
+        // If handles specified, must match both
+        if (edgeSpec.sourceHandle && edgeSpec.targetHandle) {
+          return e.sourceHandle !== edgeSpec.sourceHandle || 
+                 e.targetHandle !== edgeSpec.targetHandle;
+        }
+
+        // Otherwise remove all edges between these nodes
+        return false;
+      });
+    }
+
+    return flow;
+  }
+
+  /**
+   * Calculates node positions for bulk layout.
+   * 
+   * @param count - Number of nodes to position
+   * @param layout - Layout strategy
+   * @param spacing - Space between nodes
+   * @returns Array of positions
+   */
+  private calculateBulkLayout(
+    count: number,
+    layout: 'horizontal' | 'vertical' | 'grid',
+    spacing: number
+  ): Array<{ x: number; y: number }> {
+    const positions: Array<{ x: number; y: number }> = [];
+
+    switch (layout) {
+      case 'horizontal':
+        for (let i = 0; i < count; i++) {
+          positions.push({
+            x: 100 + (i * spacing),
+            y: 200
+          });
+        }
+        break;
+
+      case 'vertical':
+        for (let i = 0; i < count; i++) {
+          positions.push({
+            x: 100,
+            y: 100 + (i * spacing)
+          });
+        }
+        break;
+
+      case 'grid':
+        const columns = Math.ceil(Math.sqrt(count));
+        for (let i = 0; i < count; i++) {
+          const row = Math.floor(i / columns);
+          const col = i % columns;
+          positions.push({
+            x: 100 + (col * spacing),
+            y: 100 + (row * spacing)
+          });
+        }
+        break;
+    }
+
+    return positions;
   }
 }

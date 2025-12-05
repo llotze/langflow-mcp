@@ -10,7 +10,11 @@ export type FlowDiffOperationType =
   | 'moveNode'
   | 'addEdge'
   | 'removeEdge'
-  | 'updateMetadata';
+  | 'updateMetadata'
+  | 'addNodes'      // Bulk add
+  | 'removeNodes'   // Bulk remove
+  | 'addEdges'      // Bulk add edges
+  | 'removeEdges';  // Bulk remove edges
 
 export interface BaseOperation {
   type: FlowDiffOperationType;
@@ -114,6 +118,59 @@ export interface UpdateMetadataOperation extends BaseOperation {
   };
 }
 
+/**
+ * Bulk add multiple nodes in a single operation.
+ * More efficient than multiple addNode operations.
+ */
+export interface AddNodesOperation extends BaseOperation {
+  type: 'addNodes';
+  nodes: Array<{
+    nodeId: string;
+    component: string;
+    params?: Record<string, any>;
+    position?: { x: number; y: number };
+  }>;
+  autoLayout?: 'horizontal' | 'vertical' | 'grid';
+  spacing?: number;
+}
+
+/**
+ * Bulk remove multiple nodes.
+ */
+export interface RemoveNodesOperation extends BaseOperation {
+  type: 'removeNodes';
+  nodeIds: string[];
+  removeConnections?: boolean;
+}
+
+/**
+ * Bulk add multiple edges.
+ */
+export interface AddEdgesOperation extends BaseOperation {
+  type: 'addEdges';
+  edges: Array<{
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+    targetParam?: string;
+  }>;
+  validateConnections?: boolean;
+}
+
+/**
+ * Bulk remove multiple edges.
+ */
+export interface RemoveEdgesOperation extends BaseOperation {
+  type: 'removeEdges';
+  edges: Array<{
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+  }>;
+}
+
 export type FlowDiffOperation =
   | AddNodeOperation
   | RemoveNodeOperation
@@ -121,7 +178,11 @@ export type FlowDiffOperation =
   | MoveNodeOperation
   | AddEdgeOperation
   | RemoveEdgeOperation
-  | UpdateMetadataOperation;
+  | UpdateMetadataOperation
+  | AddNodesOperation
+  | RemoveNodesOperation
+  | AddEdgesOperation
+  | RemoveEdgesOperation;
 
 /**
  * Result of applying diff operations to a flow.
