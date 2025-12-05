@@ -20,16 +20,32 @@ export interface ValidationResult {
   };
 }
 
+/**
+ * FlowValidator ensures Langflow flow structural integrity and correctness.
+ * 
+ * Validates flows against the component catalog, checking:
+ * - Flow metadata completeness
+ * - Node structure and component compatibility
+ * - Required parameters and type correctness
+ * - Edge validity and graph connectivity
+ * - Orphaned nodes and potential issues
+ */
 export class FlowValidator {
   constructor(private componentCatalog: Record<string, LangflowComponent>) {}
 
   /**
-   * Validate entire flow structure
+   * Validates an entire flow structure.
+   * 
+   * @param flow - The Langflow flow to validate
+   * @returns Validation result with issues categorized by severity
+   * 
+   * Performs comprehensive validation including metadata, nodes, edges,
+   * and connectivity analysis. Returns all issues found, allowing the
+   * caller to decide whether to proceed based on error vs warning counts.
    */
   async validateFlow(flow: LangflowFlow): Promise<ValidationResult> {
     const issues: ValidationIssue[] = [];
 
-    // 1. Validate flow metadata
     if (!flow.name || flow.name.trim().length === 0) {
       issues.push({
         severity: 'error',
@@ -38,24 +54,22 @@ export class FlowValidator {
       });
     }
 
-    // 2. Validate nodes array exists
     if (!flow.data?.nodes || !Array.isArray(flow.data.nodes)) {
       issues.push({
         severity: 'error',
         message: 'Flow must have a data.nodes array',
         fix: 'Set flow.data.nodes = []',
       });
-      
       return this.buildResult(flow, issues);
     }
 
-    // 3. Validate each node
+    // Validate each node
     for (const node of flow.data.nodes) {
       const nodeIssues = await this.validateNode(node);
       issues.push(...nodeIssues);
     }
 
-    // 4. Validate edges
+    // Validate edges
     if (flow.data.edges && Array.isArray(flow.data.edges)) {
       for (const edge of flow.data.edges) {
         const edgeIssues = this.validateEdge(edge, flow.data.nodes);
@@ -63,7 +77,7 @@ export class FlowValidator {
       }
     }
 
-    // 5. Check for orphaned nodes (no connections)
+    // Detect orphaned nodes
     const connectedNodeIds = new Set<string>();
     flow.data.edges?.forEach(edge => {
       connectedNodeIds.add(edge.source);
@@ -85,12 +99,18 @@ export class FlowValidator {
   }
 
   /**
-   * Validate a single node
+   * Validates a single node's structure, type, and parameters.
+   * 
+   * Ensures the node:
+   * - Has a valid ID and type
+   * - References an existing component in the catalog
+   * - Contains properly structured data.node.template
+   * - Has all required parameters with correct types
+   * - Has valid position coordinates
    */
   private async validateNode(node: FlowNode): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
-    // 1. Validate node ID
     if (!node.id || node.id.trim().length === 0) {
       issues.push({
         severity: 'error',
@@ -100,7 +120,6 @@ export class FlowValidator {
       });
     }
 
-    // 2. Validate node type
     if (!node.type) {
       issues.push({
         severity: 'error',
@@ -108,10 +127,9 @@ export class FlowValidator {
         message: 'Node type is required',
         fix: 'Set node.type to a valid Langflow component name',
       });
-      return issues; // Can't proceed without type
+      return issues;
     }
 
-    // 3. Check if component exists
     const component = this.componentCatalog[node.type];
     if (!component) {
       issues.push({
@@ -120,10 +138,9 @@ export class FlowValidator {
         message: `Unknown component type: "${node.type}"`,
         fix: `Use search_components tool to find valid component names`,
       });
-      return issues; // Can't validate parameters without component
+      return issues;
     }
 
-    // 4. Validate node.data structure
     if (!node.data || typeof node.data !== 'object') {
       issues.push({
         severity: 'error',
@@ -144,16 +161,37 @@ export class FlowValidator {
       return issues;
     }
 
-    // 5. Validate required parameters - UPDATED LOGIC
+    /**
+     * Extract parameters from template if not pre-populated.
+     * Some components store parameter definitions only in the template,
+     * so we reconstruct the parameters array on-demand.
+     */
+    if (!component.parameters && component.template) {
+      component.parameters = Object.entries(component.template)
+        .filter(([key, value]) => typeof value === 'object' && (value as any).name)
+        .map(([key, value]) => {
+          const param: any = value;
+          return {
+            name: param.name,
+            display_name: param.display_name,
+            type: param.type,
+            required: param.required || false,
+            default: param.value,
+            description: param.info || param.description,
+            advanced: param.advanced,
+            show: param.show,
+          };
+        });
+    }
+
     const paramIssues = this.validateNodeParameters(node, component);
     issues.push(...paramIssues);
 
-    // 6. Validate parameter types
+    // Validate parameter types
     for (const [paramName, paramValue] of Object.entries(node.data.node.template)) {
       const paramDef = component.parameters.find(p => p.name === paramName);
       
       if (!paramDef) {
-        // Unknown parameter - warning only
         issues.push({
           severity: 'warning',
           nodeId: node.id,
@@ -164,7 +202,6 @@ export class FlowValidator {
         continue;
       }
 
-      // Type validation
       const typeValid = this.validateParameterType(paramValue, paramDef.type);
       if (!typeValid) {
         issues.push({
@@ -177,7 +214,6 @@ export class FlowValidator {
       }
     }
 
-    // 7. Validate position
     if (!node.position || typeof node.position.x !== 'number' || typeof node.position.y !== 'number') {
       issues.push({
         severity: 'warning',
@@ -191,26 +227,33 @@ export class FlowValidator {
   }
 
   /**
-   * Validate node parameters with proper default handling
+   * Validates node parameters with intelligent default handling.
+   * 
+   * A parameter is only flagged as missing if:
+   * 1. It's explicitly marked as required=true, AND
+   * 2. It has no default value available
+   * 
+   * This prevents false positives for parameters with empty string defaults
+   * or environment variable placeholders like "OPENAI_API_KEY".
    */
   private validateNodeParameters(node: FlowNode, component: LangflowComponent): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
     const template = node.data?.node?.template || {};
 
-    // Defensive: Ensure parameters is an array
-    const parameters = Array.isArray(component.parameters) ? component.parameters : [];
+    if (!component.parameters || !Array.isArray(component.parameters)) {
+      console.warn(`Component "${component.name}" has no parameters array, skipping validation`);
+      return issues;
+    }
+
+    const parameters = component.parameters;
 
     parameters.forEach((param) => {
-      // A parameter is only truly required if:
-      // 1. It's explicitly marked as required=true, AND
-      // 2. It doesn't have a default value (including empty string defaults)
       const hasDefault = param.default !== undefined && param.default !== null;
       const isRequired = param.required === true && !hasDefault;
       
       if (isRequired) {
         const value = template[param.name];
         
-        // Only flag as error if value is completely missing
         if (value === undefined || value === null) {
           issues.push({
             severity: 'error',
@@ -222,7 +265,7 @@ export class FlowValidator {
         }
       }
 
-      // Warn about empty API keys specifically (important but not blocking)
+      // Warn about missing API keys (important but not blocking)
       if (param.name === 'api_key' && param.password) {
         const value = template[param.name];
         if (!value || value === '' || value === 'OPENAI_API_KEY' || value === 'PINECONE_API_KEY') {
@@ -241,12 +284,15 @@ export class FlowValidator {
   }
 
   /**
-   * Validate an edge (connection)
+   * Validates an edge connection between two nodes.
+   * 
+   * Ensures:
+   * - Source and target nodes exist in the flow
+   * - No self-loops (node connecting to itself)
    */
   private validateEdge(edge: FlowEdge, nodes: FlowNode[]): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
 
-    // 1. Validate source node exists
     const sourceNode = nodes.find(n => n.id === edge.source);
     if (!sourceNode) {
       issues.push({
@@ -257,7 +303,6 @@ export class FlowValidator {
       });
     }
 
-    // 2. Validate target node exists
     const targetNode = nodes.find(n => n.id === edge.target);
     if (!targetNode) {
       issues.push({
@@ -268,7 +313,6 @@ export class FlowValidator {
       });
     }
 
-    // 3. Validate no self-loops
     if (edge.source === edge.target) {
       issues.push({
         severity: 'error',
@@ -282,7 +326,11 @@ export class FlowValidator {
   }
 
   /**
-   * Validate parameter type
+   * Validates that a parameter value matches its expected type.
+   * 
+   * @param value - The actual parameter value
+   * @param expectedType - The type defined in the component catalog
+   * @returns true if type matches, false otherwise
    */
   private validateParameterType(value: any, expectedType: string): boolean {
     switch (expectedType) {
@@ -300,14 +348,14 @@ export class FlowValidator {
       case 'file':
       case 'code':
       case 'prompt':
-        return typeof value === 'string'; // These are text-based
+        return typeof value === 'string';
       default:
-        return true; // Unknown type - skip validation
+        return true;
     }
   }
 
   /**
-   * Build validation result
+   * Builds the final validation result with summary statistics.
    */
   private buildResult(flow: LangflowFlow, issues: ValidationIssue[]): ValidationResult {
     const errors = issues.filter(i => i.severity === 'error').length;

@@ -13,6 +13,14 @@ import {
 } from '../types/flowDiff.js';
 import { FlowValidator, ValidationResult } from './flowValidator.js';
 
+/**
+ * FlowDiffEngine applies differential operations to Langflow flows.
+ * 
+ * This engine manages the transformation of flow structures by applying
+ * operations such as adding/removing nodes and edges, updating node properties,
+ * and modifying flow metadata. It ensures changes are validated and maintains
+ * flow integrity throughout the transformation process.
+ */
 export class FlowDiffEngine {
   constructor(
     private componentCatalog: Record<string, LangflowComponent>,
@@ -20,7 +28,14 @@ export class FlowDiffEngine {
   ) {}
 
   /**
-   * Apply a series of diff operations to a flow
+   * Applies a series of diff operations to a flow.
+   * 
+   * @param request - Contains the flow and operations to apply
+   * @returns Result object with updated flow and operation status
+   * 
+   * Operations are applied sequentially. If continueOnError is false,
+   * the process stops at the first error. If validateAfter is true,
+   * the resulting flow is validated before returning.
    */
   async applyDiff(request: FlowDiffRequest): Promise<FlowDiffResult> {
     const result: FlowDiffResult = {
@@ -33,7 +48,6 @@ export class FlowDiffEngine {
       warnings: [],
     };
 
-    // Validate flow exists
     if (!result.flow) {
       return {
         ...result,
@@ -41,6 +55,14 @@ export class FlowDiffEngine {
         errors: ['Flow is required'],
       };
     }
+
+    console.log("FlowDiffEngine.applyDiff: Input flow structure:", {
+      hasFlow: !!request.flow,
+      hasData: !!request.flow?.data,
+      hasNodes: !!request.flow?.data?.nodes,
+      nodesLength: request.flow?.data?.nodes?.length,
+      nodesIsArray: Array.isArray(request.flow?.data?.nodes)
+    });
 
     // Apply each operation sequentially
     for (let i = 0; i < request.operations.length; i++) {
@@ -56,7 +78,7 @@ export class FlowDiffEngine {
           `Operation ${i} (${operation.type}): ${error.message}`
         );
         
-        // Stop on first error unless continueOnError
+        // Stop on first error unless continueOnError is enabled
         if (!request.continueOnError) {
           result.success = false;
           break;
@@ -64,9 +86,11 @@ export class FlowDiffEngine {
       }
     }
 
-    // Validate final flow if requested
+    // Validate the resulting flow if requested
     if (request.validateAfter !== false && result.success) {
+      console.log("FlowDiffEngine: Starting validation. Nodes:", result.flow.data.nodes.length);
       const validation = await this.validator.validateFlow(result.flow);
+      console.log("FlowDiffEngine: Validation result:", { valid: validation.valid, issues: validation.issues });
       
       if (!validation.valid) {
         result.success = false;
@@ -78,17 +102,24 @@ export class FlowDiffEngine {
         );
       }
       
-      // Add warnings
       validation.issues
         .filter(i => i.severity === 'warning')
         .forEach(i => result.warnings.push(i.message));
     }
 
+    console.log("FlowDiffEngine.applyDiff: Output flow structure:", {
+      hasFlow: !!result.flow,
+      hasData: !!result.flow?.data,
+      hasNodes: !!result.flow?.data?.nodes,
+      nodesLength: result.flow?.data?.nodes?.length,
+      nodesIsArray: Array.isArray(result.flow?.data?.nodes)
+    });
+
     return result;
   }
 
   /**
-   * Apply a single operation
+   * Routes an operation to its appropriate handler method.
    */
   private async applyOperation(
     flow: LangflowFlow,
@@ -115,28 +146,29 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Add a node to the flow
+   * Adds a new node to the flow.
+   * 
+   * Validates that:
+   * - The node ID is unique
+   * - The node type exists in the component catalog
+   * - Required node properties are present
    */
   private applyAddNode(flow: LangflowFlow, op: AddNodeOperation): LangflowFlow {
     const { node, position } = op;
 
-    // Validate node ID is unique
     if (flow.data.nodes.some(n => n.id === node.id)) {
       throw new Error(`Node with ID "${node.id}" already exists`);
     }
 
-    // Validate node type exists
     if (!node.type) {
       throw new Error(`Node type is required for node "${node.id}"`);
     }
 
-    // Validate component exists
     const component = this.componentCatalog[node.type];
     if (!component) {
       throw new Error(`Unknown component type: "${node.type}"`);
     }
 
-    // Clone and add node
     const newNode = { ...node };
     if (position) {
       newNode.position = position;
@@ -147,21 +179,20 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Remove a node from the flow
+   * Removes a node from the flow.
+   * 
+   * @param removeConnections - If true, also removes all edges connected to this node
    */
   private applyRemoveNode(flow: LangflowFlow, op: RemoveNodeOperation): LangflowFlow {
     const { nodeId, removeConnections = true } = op;
 
-    // Find node index
     const nodeIndex = flow.data.nodes.findIndex(n => n.id === nodeId);
     if (nodeIndex === -1) {
       throw new Error(`Node "${nodeId}" not found`);
     }
 
-    // Remove node
     flow.data.nodes.splice(nodeIndex, 1);
 
-    // Remove connected edges if requested
     if (removeConnections) {
       flow.data.edges = flow.data.edges.filter(
         e => e.source !== nodeId && e.target !== nodeId
@@ -172,46 +203,142 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Update node properties
+   * Updates node properties, particularly template field values.
+   * 
+   * This is the most complex operation as it handles:
+   * 1. Extracting and storing template updates
+   * 2. Unwrapping nested value objects
+   * 3. Merging updates with existing node data
+   * 4. Reconstructing the node from the component catalog
+   * 5. Preserving user values while applying updates
+   * 
+   * The reconstruction step ensures the node structure matches
+   * the current component definition, which is critical for
+   * maintaining compatibility as components evolve.
    */
   private applyUpdateNode(flow: LangflowFlow, op: UpdateNodeOperation): LangflowFlow {
-    const { nodeId, updates, merge = true } = op;
-
-    // Find node
-    const node = flow.data.nodes.find(n => n.id === nodeId);
+    const node = flow.data.nodes.find((n: FlowNode) => n.id === op.nodeId);
     if (!node) {
-      throw new Error(`Node "${nodeId}" not found`);
+      throw new Error(`Node ${op.nodeId} not found in flow`);
     }
 
-    // Apply position update
-    if (updates.position) {
-      node.position = updates.position;
-    }
-
-    // Apply template updates
-    if (updates.template) {
-      if (merge) {
-        // Merge with existing template
-        node.data.node.template = {
-          ...node.data.node.template,
-          ...updates.template,
-        };
-      } else {
-        // Replace entire template
-        node.data.node.template = updates.template;
+    // Store template updates separately to preserve them during reconstruction
+    const templateUpdates: Record<string, any> = {};
+    
+    if (op.updates.template && node.data?.node?.template) {
+      console.log(`Merging template updates for ${op.nodeId}`);
+      
+      for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
+        if (node.data.node.template[fieldName]) {
+          // Unwrap nested value objects (e.g., {value: 0.7} -> 0.7)
+          let actualValue = fieldValue;
+          if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
+            actualValue = (fieldValue as any).value;
+            console.log(`Unwrapped nested value for ${fieldName}: ${JSON.stringify(fieldValue)} -> ${actualValue}`);
+          }
+          
+          // Save for later application during reconstruction
+          templateUpdates[fieldName] = actualValue;
+          node.data.node.template[fieldName].value = actualValue;
+          console.log(`Updated ${fieldName} = ${actualValue} (type: ${typeof actualValue})`);
+        } else {
+          console.warn(`Field ${fieldName} not found in component template`);
+        }
       }
+      
+      // Remove template from updates to prevent duplicate processing
+      const { template, ...otherUpdates } = op.updates;
+      op.updates = otherUpdates;
     }
 
-    // Apply display name update
-    if (updates.displayName) {
-      node.data.node.display_name = updates.displayName;
+    /**
+     * Deep merge utility for combining nested objects.
+     * Handles type mismatches gracefully and skips null/undefined values.
+     */
+    const deepMerge = (target: any, source: any): any => {
+      if (!source || typeof source !== 'object') return source;
+      if (!target || typeof target !== 'object') return source;
+      
+      const result = { ...target };
+      
+      for (const key in source) {
+        if (source[key] === null || source[key] === undefined) {
+          continue;
+        }
+        
+        if (typeof source[key] !== 'object' || source[key] === null) {
+          if (target[key] !== undefined && typeof target[key] === 'object' && typeof source[key] !== 'object') {
+            console.warn(`Type mismatch for ${key}: target is object, source is ${typeof source[key]}. Skipping.`);
+            continue;
+          }
+          result[key] = source[key];
+        } 
+        else if (typeof target[key] === 'object' && target[key] !== null) {
+          result[key] = deepMerge(target[key], source[key]);
+        } 
+        else {
+          result[key] = source[key];
+        }
+      }
+      
+      return result;
+    };
+
+    // Apply non-template updates
+    if (op.merge && node.data) {
+      node.data = deepMerge(node.data, op.updates);
+    } else {
+      Object.assign(node.data, op.updates);
+    }
+
+    /**
+     * Reconstruct node from component catalog to ensure structural integrity.
+     * 
+     * This critical step:
+     * 1. Creates a fresh template from the component catalog
+     * 2. Applies saved template updates (highest priority)
+     * 3. Preserves existing user values for unchanged fields
+     * 
+     * By iterating over the NEW template (not the old one), we ensure
+     * all fields from the component catalog are processed, preventing
+     * updates from being silently ignored due to missing fields.
+     */
+    const componentType = node.data?.type;
+    if (componentType && this.componentCatalog[componentType]) {
+      const componentTemplate = this.componentCatalog[componentType];
+      const nodeTemplate = JSON.parse(JSON.stringify(componentTemplate.template || {}));
+      
+      if (node.data.node?.template && nodeTemplate) {
+        // CRITICAL: Iterate over the NEW template, not the old one
+        // This ensures all fields from the component catalog are processed
+        for (const fieldName in nodeTemplate) {
+          if (templateUpdates.hasOwnProperty(fieldName)) {
+            // Apply saved updates first (highest priority)
+            nodeTemplate[fieldName].value = templateUpdates[fieldName];
+            console.log(`Applied saved update for ${fieldName}: ${templateUpdates[fieldName]}`);
+          } else if (node.data.node?.template?.[fieldName]?.value !== undefined) {
+            // Preserve existing values for unchanged fields
+            nodeTemplate[fieldName].value = node.data.node.template[fieldName].value;
+          }
+        }
+      }
+      
+      // Reconstruct node with updated template
+      node.data.node = {
+        ...componentTemplate,
+        template: nodeTemplate
+      };
+      
+      // Remove redundant properties
+      delete (node.data.node as any).type;
+      delete (node.data.node as any).name;
     }
 
     return flow;
   }
 
   /**
-   * Move a node to new position
+   * Updates the position of a node in the flow canvas.
    */
   private applyMoveNode(flow: LangflowFlow, op: MoveNodeOperation): LangflowFlow {
     const { nodeId, position } = op;
@@ -226,12 +353,16 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Add an edge to the flow
+   * Adds a connection (edge) between two nodes.
+   * 
+   * Validates that:
+   * - Both source and target nodes exist
+   * - The connection doesn't already exist
+   * - The connection is valid (if validateConnection is true)
    */
   private applyAddEdge(flow: LangflowFlow, op: AddEdgeOperation): LangflowFlow {
     const { edge, validateConnection = true } = op;
 
-    // Validate nodes exist
     const sourceExists = flow.data.nodes.some(n => n.id === edge.source);
     const targetExists = flow.data.nodes.some(n => n.id === edge.target);
 
@@ -242,7 +373,7 @@ export class FlowDiffEngine {
       throw new Error(`Target node "${edge.target}" not found`);
     }
 
-    // Check for duplicate edge
+    // Check for duplicate connections
     const duplicate = flow.data.edges.some(
       e =>
         e.source === edge.source &&
@@ -257,18 +388,19 @@ export class FlowDiffEngine {
       );
     }
 
-    // Add edge
     flow.data.edges.push(edge);
     return flow;
   }
 
   /**
-   * Remove an edge from the flow
+   * Removes a connection between two nodes.
+   * 
+   * If handles are not specified, removes the first matching edge
+   * between the source and target nodes.
    */
   private applyRemoveEdge(flow: LangflowFlow, op: RemoveEdgeOperation): LangflowFlow {
     const { source, target, sourceHandle, targetHandle } = op;
 
-    // Find edge index
     const edgeIndex = flow.data.edges.findIndex(
       e =>
         e.source === source &&
@@ -281,13 +413,15 @@ export class FlowDiffEngine {
       throw new Error(`Edge from "${source}" to "${target}" not found`);
     }
 
-    // Remove edge
     flow.data.edges.splice(edgeIndex, 1);
     return flow;
   }
 
   /**
-   * Update flow metadata
+   * Updates flow-level metadata such as name, description, tags.
+   * 
+   * Only specified fields are updated; others remain unchanged.
+   * Custom metadata is merged, not replaced.
    */
   private applyUpdateMetadata(
     flow: LangflowFlow,
@@ -318,7 +452,7 @@ export class FlowDiffEngine {
   }
 
   /**
-   * Deep clone a flow
+   * Creates a deep copy of a flow to prevent mutations.
    */
   private cloneFlow(flow: LangflowFlow): LangflowFlow {
     return JSON.parse(JSON.stringify(flow));

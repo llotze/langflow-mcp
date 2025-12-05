@@ -2,6 +2,9 @@ import { LangflowComponent, LangflowFlow, FlowNode, FlowEdge } from '../src/type
 import { FlowValidator } from '../src/services/flowValidator.js';
 import { FlowDiffEngine } from '../src/services/flowDiffEngine.js';
 import { AddNodeOperation, RemoveNodeOperation } from '../src/types/flowDiff.js';
+import { LangflowFlowBuilder } from '../src/services/LangflowFlowBuilder.js';
+import { LangflowApiService } from '../src/services/langflowApiService.js';
+import { LangflowComponentService } from '../src/services/LangflowComponentService.js';
 
 import axios from 'axios';
 
@@ -32,16 +35,21 @@ function printResult(label: string, result: any) {
 }
 
 async function getFirstComponent() {
-  // Get a list of components using the search endpoint
   const res = await axios.get(`${BASE_URL}/mcp/api/search?keyword=a`);
   const catalog = res.data.data;
   for (const category in catalog) {
     const components = catalog[category];
     for (const name in components) {
-      return components[name];
+      // Fetch full details for this component
+      const detailsRes = await axios.get(`${BASE_URL}/mcp/api/components/${name}`);
+      const component = detailsRes.data.data;
+      if (component.template && typeof component.template === 'object') {
+        if (!component.name) component.name = name;
+        return component;
+      }
     }
   }
-  throw new Error('No components found in catalog');
+  throw new Error('No components with a valid template found in catalog');
 }
 
 // Main test
@@ -54,26 +62,24 @@ async function main() {
   // 2. Get a valid component from the catalog
   const component = await getFirstComponent();
 
-  // 3. Tweak flow: Add a node using the fetched component
+  // 3. Build a valid node using LangflowFlowBuilder
+  const apiClient = new LangflowApiService(BASE_URL, process.env.LANGFLOW_API_KEY || '');
+  const componentService = new LangflowComponentService(apiClient);
+  const flowBuilder = new LangflowFlowBuilder(componentService, apiClient);
+
+  // Fill required/default parameters if needed
+  const node = await flowBuilder.buildNode(
+    component.name,
+    'test_node_1',
+    { x: 250, y: 200 },
+    {} // You can pass required params here
+  );
+
   const addNodeOp = {
     type: 'addNode',
-    node: {
-      id: 'test_node_1',
-      type: component.name,
-      position: { x: 250, y: 200 },
-      data: {
-        id: 'test_node_1',
-        type: component.name,
-        node: {
-          template: {}, // You can fill with default params if needed
-          display_name: component.display_name,
-          description: component.description,
-          base_classes: component.base_classes || [],
-          outputs: [],
-        },
-      },
-    },
+    node
   };
+
   const tweakRes1 = await axios.post(`${BASE_URL}/mcp/api/tweak-flow/${flowId}`, {
     operations: [addNodeOp],
     validateAfter: true,

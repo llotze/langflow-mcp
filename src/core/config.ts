@@ -1,11 +1,17 @@
 import dotenv from 'dotenv';
 
+/**
+ * Server configuration loaded from environment variables.
+ */
 export interface Config {
   port: number;
   langflowApiUrl?: string;
   langflowApiKey?: string;
 }
 
+/**
+ * Loads configuration from .env file and environment variables.
+ */
 export function loadConfig(): Config {
   dotenv.config();
 
