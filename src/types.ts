@@ -1,6 +1,9 @@
 import type { Node, Edge } from '@xyflow/react';
 
-// Use ReactFlow's Node type directly
+/**
+ * Langflow flow node extending ReactFlow's Node type.
+ * Contains component template, metadata, and display properties.
+ */
 export type FlowNode = Node<{
   id?: string;
   type: string;
@@ -32,11 +35,17 @@ export type FlowNode = Node<{
   showNode?: boolean;
 }>;
 
+/**
+ * Langflow connection between nodes.
+ */
 export type FlowEdge = Edge<{
   sourceHandle: any;
   targetHandle: any;
 }>;
 
+/**
+ * Component definition from Langflow's catalog.
+ */
 export interface LangflowComponent {
   name: string;
   display_name: string;
@@ -65,6 +74,9 @@ export interface LangflowComponent {
 
 export type FlatComponentCatalog = Record<string, LangflowComponent>;
 
+/**
+ * Component parameter definition.
+ */
 export interface ComponentParameter {
   name: string;
   display_name?: string;
@@ -83,6 +95,9 @@ export interface ComponentParameter {
   show?: boolean;
 }
 
+/**
+ * Complete Langflow flow structure.
+ */
 export interface LangflowFlow {
   name: string;
   description?: string;
@@ -144,15 +159,4 @@ export interface MCPToolResponse {
   message?: string;
 }
 
-// FlowDiffOperation
-export interface FlowDiffOperation {
-  operation: 'addNode' | 'removeNode' | 'updateNode' | 'addConnection' | 'removeConnection' | 'updateFlowMetadata';
-  nodeId?: string;
-  node?: FlowNode;
-  updates?: Partial<FlowNode>;
-  edge?: FlowEdge;
-  metadata?: Record<string, any>;
-}
-
-// Export everything from flowDiff.ts
 export * from './types/flowDiff.js';

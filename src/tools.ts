@@ -6,7 +6,12 @@ import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
 
-// Helper to flatten nested component catalog
+/**
+ * Flattens nested component catalog into a single-level map.
+ * 
+ * Converts Langflow's category-based structure into a flat lookup
+ * for easier component access by name.
+ */
 function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent> {
   const flat: Record<string, LangflowComponent> = {};
   for (const category in catalog) {
@@ -17,8 +22,43 @@ function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent
   return flat;
 }
 
+/**
+ * MCPTools provides MCP server endpoints for Langflow operations.
+ * 
+ * Handles template management, flow creation/modification, component search,
+ * and flow execution. Acts as the bridge between MCP protocol and Langflow API.
+ */
 export class MCPTools {
-  // --- 1. Search Templates ---
+  private langflowApi?: LangflowApiService;
+  private componentService?: LangflowComponentService;
+  private flowBuilder?: LangflowFlowBuilder;
+
+  /**
+   * Creates a new MCPTools instance.
+   * 
+   * @param _config - Reserved for future server configuration
+   * @param _logger - Reserved for future logging implementation
+   * @param langflowApiUrl - Langflow instance URL
+   * @param langflowApiKey - API key for authentication
+   */
+  constructor(
+    _config?: any,
+    _logger?: any,
+    langflowApiUrl?: string,
+    langflowApiKey?: string
+  ) {
+    if (langflowApiUrl && langflowApiKey) {
+      this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
+      this.componentService = new LangflowComponentService(this.langflowApi);
+      this.flowBuilder = new LangflowFlowBuilder(this.componentService, this.langflowApi);
+    }
+  }
+
+  /**
+   * Searches available flow templates by keyword and tags.
+   * 
+   * Supports pagination for large template collections.
+   */
   public async searchTemplates(req: any, res: any): Promise<void> {
     try {
       const { keyword, tags, page = 1, pageSize = 20 } = req.query;
@@ -45,7 +85,9 @@ export class MCPTools {
     }
   }
 
-  // --- 2. Get Template ---
+  /**
+   * Retrieves a specific template by ID.
+   */
   public async getTemplate(req: any, res: any): Promise<void> {
     try {
       const { templateId } = req.params;
@@ -56,28 +98,31 @@ export class MCPTools {
     }
   }
 
-  // --- 3. Create Flow from Template ---
+  /**
+   * Creates a new flow from a template.
+   * 
+   * Applies Langflow-specific handle encoding and removes spaces
+   * from edge handles to ensure proper connection validation.
+   */
   public async createFlowFromTemplate(req: any, res: any): Promise<void> {
     try {
       const { templateId } = req.params;
       const { name, description } = req.body;
       const template = loadTemplate(templateId);
 
-      // Ensure edge handles are properly encoded for Langflow (no spaces)
+      // Encode edge handles for Langflow compatibility
       if (template.data?.edges) {
         template.data.edges = template.data.edges.map((edge: any) => {
           function encodeHandle(handle: string) {
-            // Remove spaces after encoding
             let encoded = handle;
             if (typeof encoded === 'string' && !encoded.includes('œ')) {
               try {
                 const obj = JSON.parse(encoded.replace(/œ/g, '"'));
                 encoded = JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
               } catch {
-                // If not parseable, leave as is
+                // Leave as-is if not parseable
               }
             }
-            // Remove all spaces
             return typeof encoded === 'string' ? encoded.replace(/\s+/g, '') : encoded;
           }
           if (edge.sourceHandle) edge.sourceHandle = encodeHandle(edge.sourceHandle);
@@ -93,7 +138,6 @@ export class MCPTools {
         tags: template.tags,
       });
       
-      // ✅ ONLY return minimal info
       res.json({ 
         success: true, 
         flowId: flow.id,
@@ -105,7 +149,15 @@ export class MCPTools {
     }
   }
 
-  // --- 4. Tweak Flow ---
+  /**
+   * Applies differential updates to an existing flow.
+   * 
+   * Supports node updates, edge modifications, and metadata changes.
+   * Operations are applied sequentially and validated before persisting.
+   * 
+   * Pre-processes template updates to unwrap nested value objects,
+   * ensuring parameter values are applied correctly.
+   */
   public async tweakFlow(req: any, res: any): Promise<void> {
     try {
       console.log("RAW tweakFlow request body:", req.body);
@@ -113,11 +165,10 @@ export class MCPTools {
       console.log("Translated tweakFlow request:", translated);
       const { flowId, operations, validateAfter = true, continueOnError = false } = translated;
       
-      // ✅ ADD: Pre-process operations to unwrap nested values
+      // Pre-process operations to unwrap nested values
       for (const op of operations) {
         if (op.type === 'updateNode' && op.updates?.template) {
           for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
-            // If value is wrapped in {value: X}, unwrap it
             if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
               console.log(`Pre-unwrapping ${fieldName}: ${JSON.stringify(fieldValue)} -> ${(fieldValue as any).value}`);
               op.updates.template[fieldName] = (fieldValue as any).value;
@@ -146,22 +197,16 @@ export class MCPTools {
         return;
       }
       
-      // Defensive check for flow structure
       if (!flow.data || !Array.isArray(flow.data.nodes) || !Array.isArray(flow.data.edges)) {
         res.status(500).json({ error: 'Flow data is missing nodes or edges array.' });
         return;
       }
 
-      // ✅ REMOVE ALL NODE RECONSTRUCTION CODE FROM HERE
-      // Let FlowDiffEngine handle it in applyUpdateNode
-
-      // PATCH GENERIC NODE TYPES ONLY
       const rawCatalog = await this.componentService!.getAllComponents();
       const componentCatalog = flattenComponentCatalog(rawCatalog);
       
-      // ✅ ONLY update data.type, NEVER change node.type from "genericNode"!
+      // Normalize component types (ensure data.type matches catalog)
       for (const node of flow.data.nodes as FlowNode[]) {
-        // Ensure data.type matches the component type
         if (node.type === "genericNode" && node.data?.node?.metadata?.module) {
           const modulePath: string = node.data.node.metadata.module;
           let className = modulePath.split('.').pop();
@@ -170,16 +215,14 @@ export class MCPTools {
             className = "Prompt";
           }
           
-          // ✅ ONLY update data.type, keep node.type as "genericNode"
           if (className && componentCatalog[className] && node.data) {
             console.log(`Setting data.type for ${node.id} to ${className}`);
             node.data.type = className;
-            // ❌ DO NOT set node.type = className
           }
         }
       }
 
-      // Remove nodes with invalid types
+      // Remove nodes with invalid component types
       const validTypes = new Set(Object.keys(componentCatalog));
       validTypes.add("Prompt");
       validTypes.add("noteNode");
@@ -221,7 +264,6 @@ export class MCPTools {
       
       const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
       
-      // ✅ ONLY return minimal info
       res.json({ 
         success: true, 
         flowId: updated.id,
@@ -235,27 +277,30 @@ export class MCPTools {
     }
   }
 
-  // --- 5. Run Flow ---
+  /**
+   * Executes a flow with the provided inputs.
+   */
   public async runFlow(req: any, res: any): Promise<void> {
     try {
       const { flowId } = req.params;
       const { input } = req.body;
       const result = await this.langflowApi!.runFlow(flowId, input || {});
       
-      // ✅ ONLY return minimal info
       res.json({ 
         success: true, 
         flowId: flowId,
         outputCount: result.outputs?.length || 0,
         message: `Flow ${flowId} executed successfully`
-        // outputs: result.outputs  // ❌ Remove this to avoid large responses
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   }
 
-  // --- Get Flow Details (when you actually need them) ---
+  /**
+   * Retrieves complete flow details including all nodes and edges.
+   * WARNING: Can return large payloads.
+   */
   public async getFlowDetails(req: any, res: any): Promise<void> {
     try {
       const { flowId } = req.params;
@@ -266,25 +311,8 @@ export class MCPTools {
     }
   }
 
-  private langflowApi?: LangflowApiService;
-  private componentService?: LangflowComponentService;
-  private flowBuilder?: LangflowFlowBuilder;
-
-  constructor(
-    _unused: any,
-    _unused2: any,
-    langflowApiUrl?: string,
-    langflowApiKey?: string
-  ) {
-    if (langflowApiUrl && langflowApiKey) {
-      this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
-      this.componentService = new LangflowComponentService(this.langflowApi);
-      this.flowBuilder = new LangflowFlowBuilder(this.componentService, this.langflowApi);
-    }
-  }
-
   /**
-   *  API-FIRST: Search components from Langflow API
+   * Searches for Langflow components by keyword.
    */
   public async searchLangflowComponents(req: any, res: any): Promise<void> {
     if (!this.componentService) {
@@ -301,7 +329,7 @@ export class MCPTools {
   }
 
   /**
-   *  API-FIRST: Get component details from Langflow API
+   * Retrieves detailed template information for a component.
    */
   public async getLangflowComponentDetails(req: any, res: any): Promise<void> {
     if (!this.componentService) {
@@ -314,7 +342,7 @@ export class MCPTools {
   }
 
   /**
-   *  API-FIRST: Build and deploy flow using Langflow API
+   * Builds and deploys a flow from component specifications.
    */
   public async buildAndDeployFlow(req: any, res: any): Promise<void> {
     if (!this.flowBuilder) {
@@ -342,7 +370,8 @@ export class MCPTools {
   }
 
   /**
-   *  API-FIRST: Create minimal test flow
+   * Creates a minimal test chatbot flow for API testing.
+   * Uses hardcoded OpenAI credentials from environment.
    */
   public async createMinimalTestFlow(req: any, res: any): Promise<void> {
     if (!this.flowBuilder) {
@@ -390,7 +419,10 @@ export class MCPTools {
   }
 
   /**
-   * Get essentials for a Langflow component
+   * Returns essential information about a component.
+   * 
+   * Filters out advanced parameters to provide a focused view
+   * of the most commonly used configuration options.
    */
   public async getComponentEssentials(req: any, res: any): Promise<void> {
     if (!this.componentService) {
@@ -400,7 +432,6 @@ export class MCPTools {
     const { componentName } = req.params;
     try {
       const component = await this.componentService.getComponentTemplate(componentName);
-      // Extract essentials
       const essentials = {
         componentName: component.name,
         displayName: component.display_name,
@@ -419,7 +450,10 @@ export class MCPTools {
   }
 
   /**
-   * Search properties in a Langflow component
+   * Searches component parameters by keyword.
+   * 
+   * Useful for finding specific configuration options without
+   * loading the entire component definition.
    */
   public async searchComponentProperties(req: any, res: any): Promise<void> {
     if (!this.componentService) {
@@ -447,7 +481,11 @@ export class MCPTools {
   }
 }
 
-// Helper for recursive property search
+/**
+ * Searches component parameters by keyword.
+ * 
+ * Matches against parameter name, display name, and description.
+ */
 export function searchComponentParams(parameters: any[], query: string) {
   const queryLower = query.toLowerCase();
   return parameters.filter(p =>
@@ -457,7 +495,11 @@ export function searchComponentParams(parameters: any[], query: string) {
   );
 }
 
-// Only accept 'operations' array, reject tweaks/newName/newDescription
+/**
+ * Translates legacy tweak request format to operations-based format.
+ * 
+ * @throws Error if operations array is missing or invalid
+ */
 function translateTweakFlowRequest(body: any) {
   if (Array.isArray(body.operations) && body.operations.length > 0) {
     return {
@@ -471,48 +513,3 @@ function translateTweakFlowRequest(body: any) {
     "Missing or invalid 'operations' array. Only 'operations' is supported. Example: { flowId: 'FLOW_ID', operations: [ { type: 'updateNode', nodeId: 'openai_1', updates: { template: { temperature: 0.9 } }, merge: true } ] }"
   );
 }
-
-// In your tweakFlow handler:
-export const tweakFlowTool = {
-  name: "tweak_flow",
-  description: "Edit an existing Langflow flow by applying a set of operations. You must provide a flowId and an operations array. Each operation can update nodes, edges, or metadata.",
-  usage: `
-{
-  "flowId": "FLOW_ID",
-  "operations": [
-    {
-      "type": "updateNode",
-      "nodeId": "openai_1",
-      "updates": {
-        "template": {
-          "max_tokens": 500,
-          "temperature": 0.9,
-          "system_message": "You are a creative and enthusiastic assistant who loves to help with brainstorming ideas."
-        }
-      },
-      "merge": true
-    },
-    {
-      "type": "updateNode",
-      "nodeId": "chat_output_1",
-      "updates": {
-        "template": {
-          "sender_name": "Creative Bot"
-        }
-      },
-      "merge": true
-    },
-    {
-      "type": "updateMetadata",
-      "updates": {
-        "name": "Creative Brainstorming Bot",
-        "description": "An enhanced chatbot with higher creativity settings, perfect for brainstorming sessions"
-      }
-    }
-  ],
-  "validateAfter": true
-}
-`,
-  requiredFields: ["flowId", "operations"],
-  notes: "Do not use 'tweaks', 'newName', or 'newDescription' as top-level fields. Only 'operations' is supported."
-};

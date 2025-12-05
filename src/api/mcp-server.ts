@@ -1,3 +1,7 @@
+/**
+ * Redirect console output to stderr when running in stdio mode.
+ * This prevents console logs from interfering with MCP protocol messages.
+ */
 if (process.env.MCP_MODE === 'stdio') {
   console.log = console.error;
   console.info = console.error;
@@ -17,9 +21,25 @@ import { LangflowComponentService } from '../services/LangflowComponentService.j
 import { LangflowFlowBuilder } from '../services/LangflowFlowBuilder.js';
 import { MCPTools } from '../tools.js';
 
+/**
+ * Starts the Langflow MCP stdio server.
+ * 
+ * Implements the Model Context Protocol (MCP) over stdio, allowing
+ * Claude Desktop and other MCP clients to interact with Langflow.
+ * 
+ * The server exposes tools for:
+ * - Template discovery and instantiation
+ * - Flow modification via operations
+ * - Component search and inspection
+ * - Flow execution and monitoring
+ * 
+ * Communication uses JSON-RPC 2.0 over stdio for compatibility
+ * with MCP client implementations.
+ */
 async function main() {
   const config = loadConfig();
 
+  // Initialize Langflow API client if credentials are available
   let langflowApi: LangflowApiService | null = null;
   if (config.langflowApiUrl && config.langflowApiKey) {
     langflowApi = new LangflowApiService(
@@ -29,6 +49,7 @@ async function main() {
     await langflowApi.testConnection();
   }
 
+  // Create MCP server instance
   const server = new Server(
     {
       name: 'langflow-mcp',
@@ -41,6 +62,16 @@ async function main() {
     }
   );
 
+  /**
+   * Registers all available MCP tools with their schemas.
+   * 
+   * Each tool includes:
+   * - name: Unique identifier
+   * - description: Human-readable explanation with usage examples
+   * - inputSchema: JSON Schema defining required/optional parameters
+   * 
+   * Tool descriptions include examples and warnings to guide Claude's usage.
+   */
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
@@ -71,17 +102,63 @@ async function main() {
       },
       {
         name: 'tweak_flow',
-        description: 'Apply tweaks or operations to an existing flow by flowId',
+        description: `Edit an existing Langflow flow by applying operations.
+
+        USAGE EXAMPLE:
+        {
+          "flowId": "abc-123",
+          "operations": [
+            {
+              "type": "updateNode",
+              "nodeId": "openai_1",
+              "updates": {
+                "template": {
+                  "temperature": 0.9,
+                  "max_tokens": 500
+                }
+              },
+              "merge": true
+            }
+          ]
+        }
+
+        IMPORTANT: Only use "operations" array. Do not use legacy "tweaks" format.`,
         inputSchema: {
           type: 'object',
           properties: {
-            flowId: { type: 'string', description: 'Flow ID' },
-            tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
-            operations: { type: 'array', description: 'Array of operations to apply' },
-            newName: { type: 'string', description: 'New name for flow' },
-            newDescription: { type: 'string', description: 'New description for flow' }
+            flowId: { 
+              type: 'string', 
+              description: 'UUID of the flow to modify' 
+            },
+            operations: {
+              type: 'array',
+              description: 'Operations to apply (updateNode, addEdge, etc.)',
+              items: {
+                type: 'object',
+                properties: {
+                  type: { 
+                    type: 'string',
+                    enum: ['updateNode', 'addNode', 'removeNode', 'addEdge', 'removeEdge', 'updateMetadata']
+                  },
+                  nodeId: { type: 'string' },
+                  updates: { 
+                    type: 'object',
+                    properties: {
+                      template: { 
+                        type: 'object',
+                        description: 'Parameter values to update (e.g., temperature, max_tokens)'
+                      }
+                    }
+                  },
+                  merge: { 
+                    type: 'boolean',
+                    description: 'Deep merge updates (default: false)'
+                  }
+                }
+              }
+            }
           },
-          required: ['flowId']
+          required: ['flowId', 'operations']
         }
       },
       {
@@ -203,7 +280,21 @@ async function main() {
     ],
   }));
 
+  /**
+   * Handles tool execution requests from MCP clients.
+   * 
+   * Routes tool calls to appropriate MCPTools methods and formats
+   * responses according to MCP protocol specifications.
+   * 
+   * All responses include:
+   * - content: Array of content items (text, resources, etc.)
+   * - isError: Boolean indicating if the operation failed
+   * 
+   * Errors are caught and returned as structured error responses
+   * rather than throwing exceptions to maintain protocol compliance.
+   */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    // Initialize MCPTools with Langflow API credentials
     const mcpTools = langflowApi
       ? new MCPTools(
           undefined,
@@ -212,6 +303,8 @@ async function main() {
           config.langflowApiKey
         )
       : null;
+
+    // Check if Langflow API is configured
     if (!langflowApi) {
       return {
         content: [{
@@ -227,6 +320,8 @@ async function main() {
 
     try {
       const args = request.params.arguments || {};
+
+      // Route tool call to appropriate handler
       switch (request.params.name) {
         case 'search_templates': {
           if (!mcpTools) throw new Error('Langflow API not configured');
@@ -238,6 +333,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'get_template': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: args };
@@ -248,6 +344,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'tweak_flow': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { flowId: args.flowId }, body: args };
@@ -258,6 +355,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'run_flow': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { flowId: args.flowId }, body: args };
@@ -268,6 +366,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'get_flow_details': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { flowId: args.flowId } };
@@ -278,18 +377,21 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'search_components': {
           const results = await componentService.searchComponents(args.keyword as string);
           return {
             content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
           };
         }
+
         case 'get_component_details': {
           const template = await componentService.getComponentTemplate(args.componentName as string);
           return {
             content: [{ type: 'text', text: JSON.stringify(template, null, 2) }]
           };
         }
+
         case 'get_component_essentials': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { componentName: args.componentName } };
@@ -300,6 +402,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'search_component_properties': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { componentName: args.componentName }, query: { query: args.query } };
@@ -310,6 +413,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         case 'build_and_deploy_flow': {
           const deployed = await flowBuilder.buildAndDeployFlow(
             args.name as string,
@@ -328,6 +432,7 @@ async function main() {
             }]
           };
         }
+
         case 'create_flow_from_template': {
           if (!mcpTools) throw new Error('Langflow API not configured');
           const req = { params: { templateId: args.templateId }, body: args };
@@ -338,6 +443,7 @@ async function main() {
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
+
         default:
           return {
             content: [{
@@ -348,6 +454,7 @@ async function main() {
           };
       }
     } catch (error) {
+      // Format error response according to MCP protocol
       return {
         content: [{
           type: 'text',
@@ -361,10 +468,12 @@ async function main() {
     }
   });
 
+  // Connect server to stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
 main().catch((error) => {
+  console.error('Failed to start MCP server:', error);
   process.exit(1);
 });
