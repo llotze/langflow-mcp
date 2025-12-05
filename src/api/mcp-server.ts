@@ -20,6 +20,7 @@ import { LangflowApiService } from '../services/langflowApiService.js';
 import { LangflowComponentService } from '../services/LangflowComponentService.js';
 import { LangflowFlowBuilder } from '../services/LangflowFlowBuilder.js';
 import { MCPTools } from '../tools.js';
+import { FlowHistory } from '../services/flowHistory.js';
 
 /**
  * Starts the Langflow MCP stdio server.
@@ -39,8 +40,10 @@ import { MCPTools } from '../tools.js';
 async function main() {
   const config = loadConfig();
 
-  // Initialize Langflow API client if credentials are available
+  // Initialize services
   let langflowApi: LangflowApiService | null = null;
+  const flowHistory = new FlowHistory();  // Create history instance
+
   if (config.langflowApiUrl && config.langflowApiKey) {
     langflowApi = new LangflowApiService(
       config.langflowApiUrl,
@@ -312,6 +315,68 @@ async function main() {
           },
           required: ['templateId']
         }
+      },
+      
+      // NEW UNDO/REDO TOOLS
+      {
+        name: 'undo_flow_changes',
+        description: 'Undo the last set of operations applied to a flow',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to undo changes for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'redo_flow_changes',
+        description: 'Redo the next set of operations for a flow',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to redo changes for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'get_flow_history',
+        description: 'Get history information for a flow (shows what can be undone/redone)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to get history for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'jump_to_history_point',
+        description: 'Jump to a specific point in flow history',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID' 
+            },
+            entryId: {
+              type: 'string',
+              description: 'History entry ID to jump to'
+            }
+          },
+          required: ['flowId', 'entryId']
+        }
       }
     ],
   }));
@@ -336,7 +401,8 @@ async function main() {
           undefined,
           undefined,
           config.langflowApiUrl,
-          config.langflowApiKey
+          config.langflowApiKey,
+          flowHistory
         )
       : null;
 
@@ -478,6 +544,265 @@ async function main() {
             status: (code: number) => ({ json: (data: any) => { result = data; } })
           });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+
+        case 'undo_flow_changes': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId } = args;
+
+          // Add type validation
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Check if undo is available
+          if (!flowHistory.canUndo(flowId)) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Nothing to undo for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          // Get previous state
+          const previousState = flowHistory.undo(flowId);
+          if (!previousState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Failed to retrieve previous state' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply previous state to Langflow
+          await langflowApi.updateFlow(flowId, previousState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully undid last changes',
+                flowId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'redo_flow_changes': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId } = args;
+          
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Check if redo is available
+          if (!flowHistory.canRedo(flowId)) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Nothing to redo for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          // Get next state
+          const nextState = flowHistory.redo(flowId);
+          if (!nextState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Failed to retrieve next state' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply next state to Langflow
+          await langflowApi.updateFlow(flowId, nextState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully redid changes',
+                flowId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'get_flow_history': {
+          const { flowId } = args;
+          
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          if (!historyInfo) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'No history found for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                flowId,
+                ...historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'jump_to_history_point': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId, entryId } = args;
+
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          if (typeof entryId !== 'string' || !entryId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'entryId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const targetState = flowHistory.jumpTo(flowId, entryId);
+          if (!targetState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'History entry not found' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply target state to Langflow
+          await langflowApi.updateFlow(flowId, targetState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully jumped to history point',
+                flowId,
+                entryId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
         }
 
         default:

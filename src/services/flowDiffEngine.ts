@@ -16,6 +16,7 @@ import {
   UpdateMetadataOperation,
 } from '../types/flowDiff.js';
 import { FlowValidator, ValidationResult } from './flowValidator.js';
+import { FlowHistory } from './flowHistory.js';
 
 /**
  * FlowDiffEngine applies differential operations to Langflow flows.
@@ -28,7 +29,8 @@ import { FlowValidator, ValidationResult } from './flowValidator.js';
 export class FlowDiffEngine {
   constructor(
     private componentCatalog: Record<string, LangflowComponent>,
-    private validator: FlowValidator
+    private validator: FlowValidator,
+    private history?: FlowHistory  // Optional history tracking
   ) {}
 
   /**
@@ -95,17 +97,9 @@ export class FlowDiffEngine {
       };
     }
 
-    console.log("FlowDiffEngine.applyDiff: Input flow structure:", {
-      hasFlow: !!request.flow,
-      hasData: !!request.flow?.data,
-      hasNodes: !!request.flow?.data?.nodes,
-      nodesLength: request.flow?.data?.nodes?.length,
-      nodesIsArray: Array.isArray(request.flow?.data?.nodes)
-    });
-
-    // Take snapshot for potential rollback
+    // CAPTURE BEFORE STATE
+    const beforeState = this.cloneFlow(result.flow);
     const snapshot = this.cloneFlow(result.flow);
-    console.log("Snapshot created before applying operations");
 
     try {
       // Pre-validate all operations before applying any changes
@@ -207,6 +201,20 @@ export class FlowDiffEngine {
         nodesLength: result.flow?.data?.nodes?.length,
         nodesIsArray: Array.isArray(result.flow?.data?.nodes)
       });
+
+      // RECORD HISTORY ENTRY (only if operations were successful)
+      if (this.history && result.success && result.operationsApplied > 0) {
+        const flowId = request.flow?.id || request.flowId || 'unknown';
+        
+        this.history.push(
+          flowId,
+          beforeState,
+          result.flow,
+          request.operations.filter((_, idx) => result.applied.includes(idx)),
+          `Applied ${result.operationsApplied} operations`,
+          'mcp-client'
+        );
+      }
 
       return result;
 

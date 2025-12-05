@@ -5,6 +5,7 @@ import type { LangflowComponent, FlowNode } from './types.js';
 import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
+import { FlowHistory } from './services/flowHistory.js';
 
 /**
  * Flattens nested component catalog into a single-level map.
@@ -32,6 +33,7 @@ export class MCPTools {
   private langflowApi?: LangflowApiService;
   private componentService?: LangflowComponentService;
   private flowBuilder?: LangflowFlowBuilder;
+  private flowHistory: FlowHistory;  // Add history
 
   /**
    * Creates a new MCPTools instance.
@@ -45,13 +47,16 @@ export class MCPTools {
     _config?: any,
     _logger?: any,
     langflowApiUrl?: string,
-    langflowApiKey?: string
+    langflowApiKey?: string,
+    flowHistory?: FlowHistory  // Accept optional history instance
   ) {
     if (langflowApiUrl && langflowApiKey) {
       this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
       this.componentService = new LangflowComponentService(this.langflowApi);
       this.flowBuilder = new LangflowFlowBuilder(this.componentService, this.langflowApi);
     }
+    
+    this.flowHistory = flowHistory || new FlowHistory();
   }
 
   /**
@@ -243,7 +248,8 @@ export class MCPTools {
       const componentCatalog2 = flattenComponentCatalog(rawCatalog2);
       const flowDiffEngine = new FlowDiffEngine(
         componentCatalog2,
-        new FlowValidator(componentCatalog2)
+        new FlowValidator(componentCatalog2),
+        this.flowHistory  // Pass history to engine
       );
       
       const result = await flowDiffEngine.applyDiff(diffRequest);
