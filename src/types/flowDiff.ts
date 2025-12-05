@@ -14,7 +14,8 @@ export type FlowDiffOperationType =
   | 'addNodes'      // Bulk add
   | 'removeNodes'   // Bulk remove
   | 'addEdges'      // Bulk add edges
-  | 'removeEdges';  // Bulk remove edges
+  | 'removeEdges'   // Bulk remove edges
+  | 'addNote';      // Add note/README
 
 export interface BaseOperation {
   type: FlowDiffOperationType;
@@ -171,8 +172,21 @@ export interface RemoveEdgesOperation extends BaseOperation {
   }>;
 }
 
+/**
+ * Adds a markdown note/README to a flow for documentation.
+ * Notes are special UI-only elements that don't connect to other nodes.
+ */
+export interface AddNoteOperation extends BaseOperation {
+  type: 'addNote';
+  noteId?: string;
+  markdown: string;
+  position?: { x: number; y: number };
+  backgroundColor?: 'neutral' | 'transparent';
+}
+
 export type FlowDiffOperation =
   | AddNodeOperation
+  | AddNoteOperation
   | RemoveNodeOperation
   | UpdateNodeOperation
   | MoveNodeOperation

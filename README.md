@@ -22,6 +22,7 @@ A Model Context Protocol (MCP) server that provides programmatic access to Langf
 - **Inspect** complete flow structure and configuration
 - **Validate** flows and individual components
 - **Undo/Redo** changes with comprehensive history tracking
+- **Add Notes** for flow documentation and README sections
 
 ### History Management
 - Track all flow modifications with before/after snapshots
@@ -58,6 +59,7 @@ The flow modification system uses an **operations-based architecture** that prov
 - `addEdge` - Create connection between nodes
 - `removeEdge` - Remove connection
 - `updateMetadata` - Modify flow name, description, and tags
+- `addNote` - Add markdown documentation notes to flows
 
 **Bulk Operations:**
 - `addNodes` - Add multiple nodes with automatic layout
@@ -178,6 +180,20 @@ curl -X POST http://localhost:3000/mcp/api/tweak-flow/FLOW_ID \
     ]
   }'
 
+# Add a note to a flow
+curl -X POST http://localhost:3000/mcp/api/tweak-flow/FLOW_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {
+        "type": "addNote",
+        "markdown": "# Flow Documentation\n\nThis flow implements...",
+        "position": { "x": 100, "y": 50 },
+        "backgroundColor": "neutral"
+      }
+    ]
+  }'
+
 # Get flow history
 curl http://localhost:3000/mcp/api/flow-history/FLOW_ID
 
@@ -285,6 +301,22 @@ Modify an existing flow using operations. Supports both single and bulk operatio
 }
 ```
 
+**Add Note Example:**
+```json
+{
+  "flowId": "abc-123-def-456",
+  "operations": [
+    {
+      "type": "addNote",
+      "noteId": "readme_1",
+      "markdown": "# Flow Documentation\n\nThis flow implements...",
+      "position": { "x": 100, "y": 50 },
+      "backgroundColor": "neutral"
+    }
+  ]
+}
+```
+
 **Parameters:**
 - `flowId` (required): UUID of the flow to modify
 - `operations` (required): Array of operation objects
@@ -327,6 +359,12 @@ Modify an existing flow using operations. Supports both single and bulk operatio
 - `updateMetadata`: Modify flow properties
   - `updates`: Object with `name`, `description`, `tags`, or `metadata`
 
+- `addNote`: Add markdown documentation to flow
+  - `noteId`: Optional note identifier (auto-generated if not provided)
+  - `markdown`: Markdown content for the note
+  - `position`: Canvas position (auto-positioned below nodes if not specified)
+  - `backgroundColor`: Note background color - `neutral` or `transparent` (default: `neutral`)
+
 **Bulk Operation Types:**
 - `addNodes`: Add multiple nodes with automatic layout
   - `nodes`: Array of node specifications with `nodeId`, `component`, and optional `params`
@@ -343,6 +381,36 @@ Modify an existing flow using operations. Supports both single and bulk operatio
 
 - `removeEdges`: Delete multiple connections at once
   - `edges`: Array with `source` and `target` node IDs (and optional handles)
+
+### `add_note_to_flow`
+
+Add a markdown note/README to a flow for documentation purposes. Notes are non-functional UI elements that help document flow purpose and usage.
+
+**Example:**
+```json
+{
+  "flowId": "abc-123-def-456",
+  "markdown": "# Chatbot Flow\n\nThis flow implements a simple chatbot using:\n- ChatInput for user messages\n- OpenAI for processing\n- ChatOutput for responses",
+  "position": { "x": 100, "y": 50 },
+  "backgroundColor": "neutral"
+}
+```
+
+**Parameters:**
+- `flowId` (required): UUID of the flow to add note to
+- `markdown` (required): Markdown-formatted text content
+- `position` (optional): Canvas position - auto-positioned below existing nodes if not specified
+- `backgroundColor` (optional): Background color - `neutral` (default) or `transparent`
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Note added successfully",
+  "flowId": "abc-123-def-456",
+  "noteId": "note-1234567890"
+}
+```
 
 ### `get_flow_history`
 
@@ -538,8 +606,8 @@ npm run build
 # Start production server
 npm start
 
-# Run tests
-npm run test:flow-diff # Not currently configured properly
+# Run tests (currently out of date)
+npm run test:flow-diff 
 npm run test:template-tools
 npm run test:component-tools
 ```

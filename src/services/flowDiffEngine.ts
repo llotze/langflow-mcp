@@ -267,6 +267,31 @@ export class FlowDiffEngine {
       case 'removeEdges':
         return this.applyRemoveEdges(flow, operation);
       
+      case 'addNote': {
+        const noteId = operation.noteId || `note-${Date.now()}`;
+        
+        const noteNode: FlowNode = {
+          id: noteId,
+          type: 'noteNode',
+          position: operation.position || { x: 100, y: 100 },
+          data: {
+            id: noteId,
+            type: 'note',
+            node: {
+              description: operation.markdown,
+              display_name: '',
+              documentation: '',
+              template: {
+                backgroundColor: operation.backgroundColor || 'neutral'
+              }
+            }
+          }
+        };
+
+        flow.data.nodes.push(noteNode);
+        return flow;
+      }
+      
       default:
         throw new Error(`Unknown operation type: ${(operation as any).type}`);
     }

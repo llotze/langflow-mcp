@@ -415,6 +415,37 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
           },
           required: ['flowId', 'entryId']
         }
+      },
+      {
+        name: 'add_note_to_flow',
+        description: 'Add a markdown note/README to a flow for documentation',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: {
+              type: 'string',
+              description: 'Flow ID to add note to'
+            },
+            markdown: {
+              type: 'string',
+              description: 'Markdown content for the note'
+            },
+            position: {
+              type: 'object',
+              properties: {
+                x: { type: 'number' },
+                y: { type: 'number' }
+              },
+              description: 'Canvas position (default: top-left)'
+            },
+            backgroundColor: {
+              type: 'string',
+              enum: ['neutral', 'transparent'],
+              description: 'Note background color'
+            }
+          },
+          required: ['flowId', 'markdown']
+        }
       }
     ],
   }));
@@ -433,7 +464,6 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
    * rather than throwing exceptions to maintain protocol compliance.
    */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    // Initialize MCPTools with Langflow API credentials
     const mcpTools = langflowApi
       ? new MCPTools(
           undefined,
@@ -444,7 +474,6 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
         )
       : null;
 
-    // Check if Langflow API is configured
     if (!langflowApi) {
       return {
         content: [{
@@ -461,7 +490,6 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
     try {
       const args = request.params.arguments || {};
 
-      // Route tool call to appropriate handler
       switch (request.params.name) {
         case 'search_templates': {
           if (!mcpTools) throw new Error('Langflow API not configured');
@@ -840,6 +868,77 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
                 historyInfo
               }, null, 2),
             }],
+          };
+        }
+
+        case 'add_note_to_flow': {
+          if (!langflowApi || !mcpTools) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId, markdown, position, backgroundColor } = args;
+
+          // Validate required parameters
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          if (typeof markdown !== 'string' || !markdown) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'markdown must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Build the addNote operation
+          const operation = {
+            type: 'addNote' as const,
+            markdown,
+            position: position || { x: 100, y: 100 },
+            backgroundColor: backgroundColor || 'neutral'
+          };
+
+          // Use tweak_flow to apply the operation
+          const req = { 
+            params: { flowId }, 
+            body: { 
+              flowId,
+              operations: [operation] 
+            } 
+          };
+
+          let result: any;
+          await mcpTools.tweakFlow(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+
+          return { 
+            content: [{ 
+              type: 'text', 
+              text: JSON.stringify(result, null, 2) 
+            }] 
           };
         }
 
