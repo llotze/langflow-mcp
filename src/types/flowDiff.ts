@@ -19,7 +19,15 @@ export interface BaseOperation {
 
 export interface AddNodeOperation extends BaseOperation {
   type: 'addNode';
-  node: FlowNode;
+  
+  // Option 1: Full FlowNode (original behavior)
+  node?: FlowNode;
+  
+  // Option 2: Simplified schema (user-friendly)
+  nodeId?: string;
+  component?: string;
+  params?: Record<string, any>;
+  
   position?: { x: number; y: number };
 }
 
@@ -50,7 +58,17 @@ export interface MoveNodeOperation extends BaseOperation {
 
 export interface AddEdgeOperation extends BaseOperation {
   type: 'addEdge';
-  edge: FlowEdge;
+  
+  // Option 1: Full FlowEdge (original)
+  edge?: FlowEdge;
+  
+  // Option 2: Simplified schema (user-friendly)
+  source?: string;
+  target?: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  targetParam?: string;  // Langflow convenience field
+  
   /** If true, validates connection compatibility (default: true) */
   validateConnection?: boolean;
 }

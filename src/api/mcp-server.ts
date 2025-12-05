@@ -104,25 +104,50 @@ async function main() {
         name: 'tweak_flow',
         description: `Edit an existing Langflow flow by applying operations.
 
-        USAGE EXAMPLE:
+        SUPPORTED OPERATIONS:
+
+        1. Add Node (Simplified):
         {
-          "flowId": "abc-123",
-          "operations": [
-            {
-              "type": "updateNode",
-              "nodeId": "openai_1",
-              "updates": {
-                "template": {
-                  "temperature": 0.9,
-                  "max_tokens": 500
-                }
-              },
-              "merge": true
-            }
-          ]
+          "type": "addNode",
+          "nodeId": "openai_1",
+          "component": "OpenAIModel",
+          "params": {
+            "model_name": "gpt-4o-mini",
+            "temperature": 0.7
+          },
+          "position": { "x": 400, "y": 200 }
         }
 
-        IMPORTANT: Only use "operations" array. Do not use legacy "tweaks" format.`,
+        2. Update Node:
+        {
+          "type": "updateNode",
+          "nodeId": "openai_1",
+          "updates": {
+            "template": {
+              "temperature": 0.9,
+              "max_tokens": 500
+            }
+          },
+          "merge": true
+        }
+
+        3. Add Edge:
+        {
+          "type": "addEdge",
+          "source": "input_1",
+          "target": "openai_1",
+          "sourceHandle": "output",
+          "targetHandle": "input_value"
+        }
+
+        4. Remove Node:
+        {
+          "type": "removeNode",
+          "nodeId": "openai_1",
+          "removeConnections": true
+        }
+
+        IMPORTANT: Always use the "operations" array format.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -132,27 +157,38 @@ async function main() {
             },
             operations: {
               type: 'array',
-              description: 'Operations to apply (updateNode, addEdge, etc.)',
+              description: 'Operations to apply',
               items: {
                 type: 'object',
                 properties: {
                   type: { 
                     type: 'string',
-                    enum: ['updateNode', 'addNode', 'removeNode', 'addEdge', 'removeEdge', 'updateMetadata']
+                    enum: ['addNode', 'updateNode', 'removeNode', 'addEdge', 'removeEdge', 'updateMetadata']
                   },
-                  nodeId: { type: 'string' },
+                  // addNode fields (simplified schema)
+                  nodeId: { type: 'string', description: 'Node ID (for addNode)' },
+                  component: { type: 'string', description: 'Component type (for addNode)' },
+                  params: { type: 'object', description: 'Component parameters (for addNode)' },
+                  
+                  // updateNode fields
                   updates: { 
                     type: 'object',
-                    properties: {
-                      template: { 
-                        type: 'object',
-                        description: 'Parameter values to update (e.g., temperature, max_tokens)'
-                      }
-                    }
+                    description: 'Updates to apply (for updateNode)'
                   },
                   merge: { 
                     type: 'boolean',
                     description: 'Deep merge updates (default: false)'
+                  },
+                  
+                  // Edge fields
+                  source: { type: 'string', description: 'Source node ID (for edges)' },
+                  target: { type: 'string', description: 'Target node ID (for edges)' },
+                  targetParam: { type: 'string', description: 'Target parameter name (for addEdge)' },
+                  
+                  // Common fields
+                  position: { 
+                    type: 'object',
+                    description: 'Node position { x, y }'
                   }
                 }
               }
