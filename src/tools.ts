@@ -1,7 +1,7 @@
 import { LangflowApiService } from './services/langflowApiService.js';
 import { LangflowComponentService } from './services/LangflowComponentService.js';
 import { LangflowFlowBuilder } from './services/LangflowFlowBuilder.js';
-import type { LangflowComponent } from './types.js';
+import type { LangflowComponent, FlowNode } from './types.js';
 import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
@@ -101,43 +101,104 @@ export class MCPTools {
   // --- 4. Tweak Flow ---
   public async tweakFlow(req: any, res: any): Promise<void> {
     try {
-      const { flowId } = req.params;
-      const { operations, validateAfter = true, continueOnError = false } = req.body;
-      if (!flowId || !Array.isArray(operations)) {
-        res.status(400).json({ error: 'Missing flowId or operations array' });
+      console.log("RAW tweakFlow request body:", req.body);
+      const translated = translateTweakFlowRequest({ ...req.body, flowId: req.params.flowId || req.body.flowId });
+      console.log("Translated tweakFlow request:", translated);
+      const { flowId, operations, validateAfter = true, continueOnError = false } = translated;
+      
+      if (!flowId || !Array.isArray(operations) || operations.length === 0) {
+        res.status(400).json({
+          error: "Missing flowId or operations array. Only 'operations' is supported. Example:",
+          received: translated,
+          example: {
+            flowId: "FLOW_ID",
+            operations: [
+              { type: "updateNode", nodeId: "openai_1", updates: { template: { temperature: 0.9 } }, merge: true }
+            ]
+          }
+        });
         return;
       }
+      
       const flow = await this.langflowApi!.getFlow(flowId);
       if (!flow) {
         res.status(404).json({ error: 'Flow not found' });
         return;
       }
+      
       // Defensive check for flow structure
-      if (
-        !flow.data ||
-        !Array.isArray(flow.data.nodes) ||
-        !Array.isArray(flow.data.edges)
-      ) {
+      if (!flow.data || !Array.isArray(flow.data.nodes) || !Array.isArray(flow.data.edges)) {
         res.status(500).json({ error: 'Flow data is missing nodes or edges array.' });
         return;
       }
+
+      // ✅ REMOVE ALL NODE RECONSTRUCTION CODE FROM HERE
+      // Let FlowDiffEngine handle it in applyUpdateNode
+
+      // PATCH GENERIC NODE TYPES ONLY
+      const rawCatalog = await this.componentService!.getAllComponents();
+      const componentCatalog = flattenComponentCatalog(rawCatalog);
+      
+      // ✅ ONLY update data.type, NEVER change node.type from "genericNode"!
+      for (const node of flow.data.nodes as FlowNode[]) {
+        // Ensure data.type matches the component type
+        if (node.type === "genericNode" && node.data?.node?.metadata?.module) {
+          const modulePath: string = node.data.node.metadata.module;
+          let className = modulePath.split('.').pop();
+          
+          if ((className === "PromptComponent" || className === "PromptTemplate") && componentCatalog["Prompt"]) {
+            className = "Prompt";
+          }
+          
+          // ✅ ONLY update data.type, keep node.type as "genericNode"
+          if (className && componentCatalog[className] && node.data) {
+            console.log(`Setting data.type for ${node.id} to ${className}`);
+            node.data.type = className;
+            // ❌ DO NOT set node.type = className
+          }
+        }
+      }
+
+      // Remove nodes with invalid types
+      const validTypes = new Set(Object.keys(componentCatalog));
+      validTypes.add("Prompt");
+      validTypes.add("noteNode");
+      validTypes.add("genericNode");
+
+      flow.data.nodes = (flow.data.nodes as FlowNode[]).filter(
+        (node: FlowNode) => typeof node.type === "string" && validTypes.has(node.type)
+      );
+
       const diffRequest = {
         flow,
         operations,
-        validateAfter,
-        continueOnError
+        validateAfter: false,
+        continueOnError: false
       };
-      const rawCatalog = await this.componentService!.getAllComponents();
-      const componentCatalog = flattenComponentCatalog(rawCatalog);
+      
+      const rawCatalog2 = await this.componentService!.getAllComponents();
+      const componentCatalog2 = flattenComponentCatalog(rawCatalog2);
       const flowDiffEngine = new FlowDiffEngine(
-        componentCatalog,
-        new FlowValidator(componentCatalog)
+        componentCatalog2,
+        new FlowValidator(componentCatalog2)
       );
+      
       const result = await flowDiffEngine.applyDiff(diffRequest);
+      
       if (!result.success) {
         res.status(400).json({ success: false, errors: result.errors, warnings: result.warnings });
         return;
       }
+      
+      if (!result.flow || !result.flow.data || !Array.isArray(result.flow.data.nodes)) {
+        res.status(500).json({ 
+          success: false, 
+          error: 'FlowDiffEngine returned invalid flow structure',
+          result: result 
+        });
+        return;
+      }
+      
       const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
       res.json({ success: true, flow: updated, operationsApplied: result.operationsApplied, warnings: result.warnings });
     } catch (err: any) {
@@ -347,3 +408,63 @@ export function searchComponentParams(parameters: any[], query: string) {
     (p.description && p.description.toLowerCase().includes(queryLower))
   );
 }
+
+// Only accept 'operations' array, reject tweaks/newName/newDescription
+function translateTweakFlowRequest(body: any) {
+  if (Array.isArray(body.operations) && body.operations.length > 0) {
+    return {
+      flowId: body.flowId,
+      operations: body.operations,
+      validateAfter: false,
+      continueOnError: !!body.continueOnError
+    };
+  }
+  throw new Error(
+    "Missing or invalid 'operations' array. Only 'operations' is supported. Example: { flowId: 'FLOW_ID', operations: [ { type: 'updateNode', nodeId: 'openai_1', updates: { template: { temperature: 0.9 } }, merge: true } ] }"
+  );
+}
+
+// In your tweakFlow handler:
+export const tweakFlowTool = {
+  name: "tweak_flow",
+  description: "Edit an existing Langflow flow by applying a set of operations. You must provide a flowId and an operations array. Each operation can update nodes, edges, or metadata.",
+  usage: `
+{
+  "flowId": "FLOW_ID",
+  "operations": [
+    {
+      "type": "updateNode",
+      "nodeId": "openai_1",
+      "updates": {
+        "template": {
+          "max_tokens": 500,
+          "temperature": 0.9,
+          "system_message": "You are a creative and enthusiastic assistant who loves to help with brainstorming ideas."
+        }
+      },
+      "merge": true
+    },
+    {
+      "type": "updateNode",
+      "nodeId": "chat_output_1",
+      "updates": {
+        "template": {
+          "sender_name": "Creative Bot"
+        }
+      },
+      "merge": true
+    },
+    {
+      "type": "updateMetadata",
+      "updates": {
+        "name": "Creative Brainstorming Bot",
+        "description": "An enhanced chatbot with higher creativity settings, perfect for brainstorming sessions"
+      }
+    }
+  ],
+  "validateAfter": true
+}
+`,
+  requiredFields: ["flowId", "operations"],
+  notes: "Do not use 'tweaks', 'newName', or 'newDescription' as top-level fields. Only 'operations' is supported."
+};

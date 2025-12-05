@@ -50,10 +50,17 @@ export interface LangflowComponent {
   legacy?: boolean;
   beta?: boolean;
   documentation_link?: string;
+  documentation?: string;
   icon?: string;
   base_classes?: string[];
   frozen?: boolean;
   field_order?: string[];
+  conditional_paths?: any[];
+  custom_fields?: Record<string, any>;
+  metadata?: Record<string, any>;
+  lf_version?: string;
+  template?: Record<string, any>;
+  outputs?: any[];
 }
 
 export type FlatComponentCatalog = Record<string, LangflowComponent>;

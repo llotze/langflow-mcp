@@ -71,16 +71,17 @@ async function main() {
       },
       {
         name: 'tweak_flow',
-        description: 'Apply tweaks to an existing flow by flowId',
+        description: 'Apply tweaks or operations to an existing flow by flowId',
         inputSchema: {
           type: 'object',
           properties: {
             flowId: { type: 'string', description: 'Flow ID' },
             tweaks: { type: 'object', description: 'Tweaks to node parameters (nodeId: params)' },
+            operations: { type: 'array', description: 'Array of operations to apply' },
             newName: { type: 'string', description: 'New name for flow' },
             newDescription: { type: 'string', description: 'New description for flow' }
           },
-          required: ['flowId', 'tweaks']
+          required: ['flowId']
         }
       },
       {

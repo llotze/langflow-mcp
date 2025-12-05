@@ -145,6 +145,25 @@ export class FlowValidator {
     }
 
     // 5. Validate required parameters - UPDATED LOGIC
+    // FIX: Extract parameters from template if not present
+    if (!component.parameters && component.template) {
+      component.parameters = Object.entries(component.template)
+        .filter(([key, value]) => typeof value === 'object' && (value as any).name)
+        .map(([key, value]) => {
+          const param: any = value;
+          return {
+            name: param.name,
+            display_name: param.display_name,
+            type: param.type,
+            required: param.required || false,
+            default: param.value,
+            description: param.info || param.description,
+            advanced: param.advanced,
+            show: param.show,
+          };
+        });
+    }
+
     const paramIssues = this.validateNodeParameters(node, component);
     issues.push(...paramIssues);
 
@@ -197,8 +216,13 @@ export class FlowValidator {
     const issues: ValidationIssue[] = [];
     const template = node.data?.node?.template || {};
 
-    // Defensive: Ensure parameters is an array
-    const parameters = Array.isArray(component.parameters) ? component.parameters : [];
+    // FIX: Defensive check - ensure parameters is an array
+    if (!component.parameters || !Array.isArray(component.parameters)) {
+      console.warn(`Component "${component.name}" has no parameters array, skipping validation`);
+      return issues;
+    }
+
+    const parameters = component.parameters;
 
     parameters.forEach((param) => {
       // A parameter is only truly required if:

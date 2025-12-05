@@ -69,10 +69,17 @@ export class LangflowApiService {
   /**
    * Update an existing flow
    */
-  async updateFlow(flowId: string, updates: Partial<LangflowFlow>): Promise<LangflowWorkflow> {
+  async updateFlow(flowId: string, flow: LangflowFlow): Promise<any> {
     try {
-      const response = await this.client.patch(`/api/v1/flows/${flowId}`, updates);
-      console.log(`✅ Updated flow: ${flowId}`);
+      // Send the complete flow object to Langflow
+      const response = await this.client.patch(`/api/v1/flows/${flowId}`, {
+        name: flow.name,
+        description: flow.description,
+        data: flow.data, // Full data object with nodes and edges
+        tags: flow.tags || [],
+        is_component: flow.is_component || false,
+      });
+      console.log(`✅ Updated flow: ${response.data.name} (${response.data.id})`);
       return response.data;
     } catch (error) {
       throw new Error(`Failed to update flow: ${this.formatError(error)}`);

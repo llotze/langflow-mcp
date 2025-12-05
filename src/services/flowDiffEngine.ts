@@ -42,6 +42,14 @@ export class FlowDiffEngine {
       };
     }
 
+    console.log("FlowDiffEngine.applyDiff: Input flow structure:", {
+      hasFlow: !!request.flow,
+      hasData: !!request.flow?.data,
+      hasNodes: !!request.flow?.data?.nodes,
+      nodesLength: request.flow?.data?.nodes?.length,
+      nodesIsArray: Array.isArray(request.flow?.data?.nodes)
+    });
+
     // Apply each operation sequentially
     for (let i = 0; i < request.operations.length; i++) {
       const operation = request.operations[i];
@@ -66,7 +74,9 @@ export class FlowDiffEngine {
 
     // Validate final flow if requested
     if (request.validateAfter !== false && result.success) {
+      console.log("FlowDiffEngine: Starting validation. Nodes:", result.flow.data.nodes.length);
       const validation = await this.validator.validateFlow(result.flow);
+      console.log("FlowDiffEngine: Validation result:", { valid: validation.valid, issues: validation.issues });
       
       if (!validation.valid) {
         result.success = false;
@@ -83,6 +93,14 @@ export class FlowDiffEngine {
         .filter(i => i.severity === 'warning')
         .forEach(i => result.warnings.push(i.message));
     }
+
+    console.log("FlowDiffEngine.applyDiff: Output flow structure:", {
+      hasFlow: !!result.flow,
+      hasData: !!result.flow?.data,
+      hasNodes: !!result.flow?.data?.nodes,
+      nodesLength: result.flow?.data?.nodes?.length,
+      nodesIsArray: Array.isArray(result.flow?.data?.nodes)
+    });
 
     return result;
   }
@@ -183,22 +201,86 @@ export class FlowDiffEngine {
       throw new Error(`Node "${nodeId}" not found`);
     }
 
+    // --- FIX: Defensive reconstruction of node.data.node if missing ---
+    if (!node.data.node) {
+      if (!node.type) {
+        throw new Error(`Node "${nodeId}" is missing a "type" property`);
+      }
+      const component = this.componentCatalog[node.type];
+      if (component) {
+        // ✅ Deep clone template to avoid mutations
+        const clonedTemplate = JSON.parse(JSON.stringify(component.template || {}));
+        
+        node.data.node = {
+          template: clonedTemplate,
+          display_name: component.display_name,
+          description: component.description,
+          base_classes: component.base_classes || [],
+          outputs: component.outputs ? JSON.parse(JSON.stringify(component.outputs)) : [],
+          icon: component.icon,
+          beta: component.beta,
+          legacy: component.legacy,
+          frozen: component.frozen,
+          tool_mode: component.tool_mode,
+          edited: false,
+          pinned: false,
+          minimized: false,
+          field_order: component.field_order || [],
+          conditional_paths: component.conditional_paths || [],
+          custom_fields: component.custom_fields || {},
+          metadata: component.metadata || {},
+          documentation: component.documentation,
+          lf_version: component.lf_version,
+          output_types: component.output_types || [],
+        };
+        
+        // ✅ Ensure no "type" or "name" fields leak in
+        delete (node.data.node as any).type;
+        delete (node.data.node as any).name;
+      } else {
+        throw new Error(`Component type "${node.type}" not found in catalog`);
+      }
+    }
+
     // Apply position update
     if (updates.position) {
       node.position = updates.position;
     }
 
-    // Apply template updates
+    // Apply template updates - FIX: Preserve ALL field metadata
     if (updates.template) {
-      if (merge) {
-        // Merge with existing template
-        node.data.node.template = {
-          ...node.data.node.template,
-          ...updates.template,
-        };
-      } else {
-        // Replace entire template
-        node.data.node.template = updates.template;
+      for (const [key, value] of Object.entries(updates.template)) {
+        const existingField = node.data.node.template[key];
+        
+        if (!existingField) {
+          // Field doesn't exist - try to get structure from component catalog
+          const componentType = node.type || node.data?.type;
+          const component = componentType ? this.componentCatalog[componentType] : undefined;
+          
+          if (component?.template?.[key]) {
+            // ✅ Clone the FULL field structure from catalog
+            node.data.node.template[key] = JSON.parse(JSON.stringify(component.template[key]));
+            // Then update only the value
+            if (typeof node.data.node.template[key] === 'object' && node.data.node.template[key] !== null) {
+              node.data.node.template[key].value = value;
+            } else {
+              node.data.node.template[key] = value;
+            }
+          } else {
+            // ❌ Unknown field - warn and skip to avoid breaking render
+            console.warn(`Cannot update unknown field "${key}" for node ${nodeId} (type: ${componentType}). Skipping.`);
+            continue;
+          }
+        } else if (typeof existingField === 'object' && existingField !== null && 'value' in existingField) {
+          // Field exists with .value property - preserve ALL metadata, only update value
+          node.data.node.template[key] = {
+            ...existingField,  // ✅ Keep _input_type, display_name, advanced, etc.
+            value: value        // ✅ Update only the value
+          };
+        } else {
+          // Field exists but is not an object with .value - replace entirely
+          node.data.node.template[key] = value;
+        }
       }
     }
 

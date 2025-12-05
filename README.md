@@ -68,3 +68,29 @@ Langflow MCP is a Model Context Protocol (MCP) server and API wrapper for Langfl
 ## License
 
 MIT
+
+### tweak_flow Tool Usage
+
+**Required fields:**  
+- `flowId` (string)
+- `operations` (array)
+
+**Example:**
+```json
+{
+  "flowId": "FLOW_ID",
+  "operations": [
+    {
+      "type": "updateNode",
+      "nodeId": "openai_1",
+      "updates": { "template": { "temperature": 0.9 } },
+      "merge": true
+    },
+    {
+      "type": "updateMetadata",
+      "updates": { "name": "Creative Brainstorming Bot" }
+    }
+  ]
+}
+```
+Do **not** use `tweaks`, `newName`, or `newDescription` as top-level fields.
