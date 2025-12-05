@@ -1,22 +1,14 @@
 import express, { Express, Request, Response } from 'express';
 import { loadConfig } from '../core/config.js';
 import { MCPTools } from '../tools.js';
+import { FlowHistory } from '../services/flowHistory.js';
 
 /**
  * Starts the Langflow MCP REST API server.
  * 
  * Initializes an Express server that exposes MCP tools as REST endpoints.
  * This server runs independently of the stdio MCP server and provides
- * HTTP access to all Langflow operations.
- * 
- * The server provides:
- * - Template management endpoints
- * - Flow CRUD operations
- * - Component search and discovery
- * - Flow execution and monitoring
- * - Health check endpoint
- * 
- * All endpoints are prefixed with `/mcp/api/` to avoid conflicts.
+ * HTTP access to all Langflow operations including flow history management.
  */
 async function main() {
   console.log('Starting Langflow MCP Server...');
@@ -25,12 +17,16 @@ async function main() {
   const { langflowApiKey, ...safeConfig } = config;
   console.log('Configuration loaded:', { ...safeConfig, langflowApiKey: langflowApiKey ? '[SET]' : '[NOT SET]' });
 
-  // Initialize MCP tools with Langflow API credentials
+  // Initialize shared history instance
+  const flowHistory = new FlowHistory();
+
+  // Initialize MCP tools with Langflow API credentials and history
   const mcpTools = new MCPTools(
     undefined,
     undefined, 
     config.langflowApiUrl,
-    config.langflowApiKey
+    config.langflowApiKey,
+    flowHistory
   );
 
   const app: Express = express();
@@ -59,6 +55,123 @@ async function main() {
     app.post('/mcp/api/tweak-flow/:flowId', (req: Request, res: Response) => mcpTools.tweakFlow(req, res));
     app.post('/mcp/api/run-flow/:flowId', (req: Request, res: Response) => mcpTools.runFlow(req, res));
     app.get('/mcp/api/flow-details/:flowId', (req: Request, res: Response) => mcpTools.getFlowDetails(req, res));
+    
+    // Flow History Management
+    app.get('/mcp/api/flow-history/:flowId', (req: Request, res: Response) => {
+      try {
+        const { flowId } = req.params;
+        const historyInfo = flowHistory.getHistoryInfo(flowId);
+        
+        if (!historyInfo) {
+          res.status(404).json({
+            success: false,
+            error: `No history found for flow ${flowId}`
+          });
+          return;
+        }
+        
+        res.json({
+          success: true,
+          flowId,
+          ...historyInfo
+        });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    app.post('/mcp/api/undo-flow/:flowId', (req: Request, res: Response) => {
+      try {
+        const { flowId } = req.params;
+        const previousState = flowHistory.undo(flowId);
+        
+        if (!previousState) {
+          res.status(400).json({
+            success: false,
+            error: 'Nothing to undo'
+          });
+          return;
+        }
+        
+        // Apply the previous state to Langflow
+        mcpTools['langflowApi']?.updateFlow(flowId, previousState)
+          .then(() => {
+            res.json({
+              success: true,
+              message: 'Successfully undid last changes',
+              flowId,
+              historyInfo: flowHistory.getHistoryInfo(flowId)
+            });
+          })
+          .catch((err: any) => {
+            res.status(500).json({ success: false, error: err.message });
+          });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    app.post('/mcp/api/redo-flow/:flowId', (req: Request, res: Response) => {
+      try {
+        const { flowId } = req.params;
+        const nextState = flowHistory.redo(flowId);
+        
+        if (!nextState) {
+          res.status(400).json({
+            success: false,
+            error: 'Nothing to redo'
+          });
+          return;
+        }
+        
+        // Apply the next state to Langflow
+        mcpTools['langflowApi']?.updateFlow(flowId, nextState)
+          .then(() => {
+            res.json({
+              success: true,
+              message: 'Successfully redid changes',
+              flowId,
+              historyInfo: flowHistory.getHistoryInfo(flowId)
+            });
+          })
+          .catch((err: any) => {
+            res.status(500).json({ success: false, error: err.message });
+          });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    app.post('/mcp/api/jump-to-history/:flowId/:entryId', (req: Request, res: Response) => {
+      try {
+        const { flowId, entryId } = req.params;
+        const targetState = flowHistory.jumpTo(flowId, entryId);
+        
+        if (!targetState) {
+          res.status(404).json({
+            success: false,
+            error: `History entry ${entryId} not found`
+          });
+          return;
+        }
+        
+        // Apply the target state to Langflow
+        mcpTools['langflowApi']?.updateFlow(flowId, targetState)
+          .then(() => {
+            res.json({
+              success: true,
+              message: `Jumped to history entry ${entryId}`,
+              flowId,
+              historyInfo: flowHistory.getHistoryInfo(flowId)
+            });
+          })
+          .catch((err: any) => {
+            res.status(500).json({ success: false, error: err.message });
+          });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
     
     // Component Discovery
     app.get('/mcp/api/search', (req, res) => mcpTools.searchLangflowComponents(req, res));
