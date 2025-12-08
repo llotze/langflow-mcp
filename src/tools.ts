@@ -169,7 +169,12 @@ export class MCPTools {
       const translated = translateTweakFlowRequest({ ...req.body, flowId: req.params.flowId || req.body.flowId });
       console.log("Translated tweakFlow request:", translated);
       const { flowId, operations, validateAfter = true, continueOnError = false } = translated;
-      
+
+      // Normalize updateNode operations
+      for (let i = 0; i < operations.length; i++) {
+        operations[i] = normalizeUpdateNodeOperation(operations[i]);
+      }
+
       // Pre-process operations to unwrap nested values
       for (const op of operations) {
         if (op.type === 'updateNode' && op.updates?.template) {
@@ -210,22 +215,6 @@ export class MCPTools {
       const rawCatalog = await this.componentService!.getAllComponents();
       const componentCatalog = flattenComponentCatalog(rawCatalog);
       
-      // Normalize component types (ensure data.type matches catalog)
-      for (const node of flow.data.nodes as FlowNode[]) {
-        if (node.type === "genericNode" && node.data?.node?.metadata?.module) {
-          const modulePath: string = node.data.node.metadata.module;
-          let className = modulePath.split('.').pop();
-          
-          if ((className === "PromptComponent" || className === "PromptTemplate") && componentCatalog["Prompt"]) {
-            className = "Prompt";
-          }
-          
-          if (className && componentCatalog[className] && node.data) {
-            console.log(`Setting data.type for ${node.id} to ${className}`);
-            node.data.type = className;
-          }
-        }
-      }
 
       // Remove nodes with invalid component types
       const validTypes = new Set(Object.keys(componentCatalog));
@@ -518,4 +507,34 @@ function translateTweakFlowRequest(body: any) {
   throw new Error(
     "Missing or invalid 'operations' array. Only 'operations' is supported. Example: { flowId: 'FLOW_ID', operations: [ { type: 'updateNode', nodeId: 'openai_1', updates: { template: { temperature: 0.9 } }, merge: true } ] }"
   );
+}
+
+/**
+ * Normalizes updateNode operations by flattening nested template structures.
+ * 
+ * @param op - The operation object to normalize
+ * @returns The normalized operation object
+ */
+function normalizeUpdateNodeOperation(op: any) {
+  // If updates.data.node.template exists, flatten it to updates.template
+  if (
+    op.type === 'updateNode' &&
+    op.updates &&
+    op.updates.data &&
+    op.updates.data.node &&
+    op.updates.data.node.template
+  ) {
+    op.updates.template = {};
+    for (const [field, valueObj] of Object.entries(op.updates.data.node.template)) {
+      // If valueObj is an object with a "value" key, use that
+      if (valueObj && typeof valueObj === 'object' && 'value' in valueObj) {
+        op.updates.template[field] = valueObj.value;
+      } else {
+        op.updates.template[field] = valueObj;
+      }
+    }
+    // Remove the nested structure
+    delete op.updates.data;
+  }
+  return op;
 }

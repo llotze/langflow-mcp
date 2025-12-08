@@ -55,13 +55,22 @@ export interface RemoveNodeOperation extends BaseOperation {
   removeConnections?: boolean;
 }
 
-export interface UpdateNodeOperation extends BaseOperation {
+export interface UpdateNodeOperation {
   type: 'updateNode';
   nodeId: string;
   updates: {
     position?: { x: number; y: number };
     template?: Record<string, any>;
     displayName?: string;
+    // Add support for nested data updates
+    data?: {
+      node?: {
+        template?: Record<string, any>;
+        [key: string]: any;
+      };
+      [key: string]: any;
+    };
+    [key: string]: any;  // Allow other properties
   };
   merge?: boolean;
 }
