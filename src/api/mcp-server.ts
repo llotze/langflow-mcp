@@ -107,61 +107,87 @@ async function main() {
         name: 'tweak_flow',
         description: `Edit an existing Langflow flow by applying operations.
 
-SUPPORTED OPERATIONS:
+      IMPORTANT: Use "updates" field, NOT "params"!
 
-1. Add Single Node:
-{
-  "type": "addNode",
-  "nodeId": "openai_1",
-  "component": "OpenAIModel",
-  "params": { "model_name": "gpt-4o-mini" },
-  "position": { "x": 400, "y": 200 }
-}
+      EXAMPLE - Update Prompt Template:
+      {
+        "flowId": "abc-123",
+        "operations": [{
+          "type": "updateNode",
+          "nodeId": "Prompt-xyz",
+          "updates": {
+            "data": {
+              "node": {
+                "template": {
+                  "template": {
+                    "value": "Your new prompt text here"
+                  }
+                }
+              }
+            }
+          },
+          "merge": true
+        }]
+      }
 
-2. Bulk Add Nodes:
-{
-  "type": "addNodes",
-  "nodes": [
-    { "nodeId": "input_1", "component": "ChatInput", "params": {} },
-    { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
-    { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
-  ],
-  "autoLayout": "horizontal",
-  "spacing": 350
-}
+      For Prompt Template components, the path is:
+      updates.data.node.template.template.value
 
-3. Bulk Remove Nodes:
-{
-  "type": "removeNodes",
-  "nodeIds": ["node1", "node2", "node3"],
-  "removeConnections": true
-}
+      SUPPORTED OPERATIONS:
 
-4. Bulk Add Edges:
-{
-  "type": "addEdges",
-  "edges": [
-    { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
-    { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
-  ]
-}
+      1. Add Single Node:
+      {
+        "type": "addNode",
+        "nodeId": "openai_1",
+        "component": "OpenAIModel",
+        "params": { "model_name": "gpt-4o-mini" },
+        "position": { "x": 400, "y": 200 }
+      }
 
-5. Bulk Remove Edges:
-{
-  "type": "removeEdges",
-  "edges": [
-    { "source": "node1", "target": "node2" },
-    { "source": "node2", "target": "node3" }
-  ]
-}
+      2. Bulk Add Nodes:
+      {
+        "type": "addNodes",
+        "nodes": [
+          { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+          { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+          { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+        ],
+        "autoLayout": "horizontal",
+        "spacing": 350
+      }
 
-BENEFITS OF BULK OPERATIONS:
-- 80-90% faster than individual operations
-- Single validation pass
-- Automatic layout positioning
-- Better error handling
+      3. Bulk Remove Nodes:
+      {
+        "type": "removeNodes",
+        "nodeIds": ["node1", "node2", "node3"],
+        "removeConnections": true
+      }
 
-IMPORTANT: Use bulk operations when adding/removing multiple items.`,
+      4. Bulk Add Edges:
+      {
+        "type": "addEdges",
+        "edges": [
+          { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+          { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+        ]
+      }
+
+      5. Bulk Remove Edges:
+      {
+        "type": "removeEdges",
+        "edges": [
+          { "source": "node1", "target": "node2" },
+          { "source": "node2", "target": "node3" }
+        ]
+      }
+
+      BENEFITS OF BULK OPERATIONS:
+      - 80-90% faster than individual operations
+      - Single validation pass
+      - Automatic layout positioning
+      - Better error handling
+
+      IMPORTANT: Use bulk operations when adding/removing multiple items.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -171,7 +197,7 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
             },
             operations: {
               type: 'array',
-              description: 'Operations to apply (use bulk operations for multiple items)',
+              description: 'Array of operations - MUST use "updates" field for updateNode operations',
               items: {
                 type: 'object',
                 properties: {
@@ -445,6 +471,44 @@ IMPORTANT: Use bulk operations when adding/removing multiple items.`,
             }
           },
           required: ['flowId', 'markdown']
+        }
+      },
+      {
+        name: 'get_chat_history',
+        description: 'Get chat history for a flow and session_id',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' }
+          },
+          required: ['flow_id', 'session_id']
+        }
+      },
+      {
+        name: 'add_chat_message',
+        description: 'Add a chat message to history for a flow and session_id',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' },
+            sender: { type: 'string', description: 'Sender (user or assistant)' },
+            message: { type: 'string', description: 'Message text' }
+          },
+          required: ['flow_id', 'session_id', 'sender', 'message']
+        }
+      },
+      {
+        name: 'get_claude_response_with_history',
+        description: 'Fetches chat history for a flow/session, calls Claude with the full history, stores and returns the assistant response.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' }
+          },
+          required: ['flow_id', 'session_id']
         }
       }
     ],

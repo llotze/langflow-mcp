@@ -21,6 +21,7 @@ import {
 } from '../types/flowDiff.js';
 import { FlowValidator, ValidationResult } from './flowValidator.js';
 import { FlowHistory } from './flowHistory.js';
+import { findComponentInCatalog } from '../utils/componentNameMapping.js';
 
 /**
  * FlowDiffEngine applies differential operations to Langflow flows.
@@ -310,35 +311,34 @@ export class FlowDiffEngine {
   private async buildNodeFromOperation(operation: AddSimplifiedNodeOperation): Promise<FlowNode> {
     const { nodeId, component, params = {}, position = { x: 0, y: 0 } } = operation;
     
-    // Get component template from catalog
-    const componentDef = this.componentCatalog[component];
-    if (!componentDef) {
+    // Find component (tries both class name and display name)
+    const catalogResult = findComponentInCatalog(component, this.componentCatalog);
+    
+    if (!catalogResult) {
       throw new Error(`Unknown component type: "${component}"`);
     }
     
-    // Clone template to avoid mutating catalog
+    const { component: componentDef, className } = catalogResult;
+    
     const template = JSON.parse(JSON.stringify(componentDef.template || {}));
     
-    // Apply user-provided parameter values
     for (const [paramName, paramValue] of Object.entries(params)) {
       if (template[paramName]) {
         template[paramName].value = paramValue;
-      } else {
-        console.warn(`Parameter "${paramName}" not found in ${component} template`);
       }
     }
     
-    // Construct complete FlowNode matching Langflow's structure
+    // ✅ Use ORIGINAL className (Python class name) for data.type
     const node: FlowNode = {
       id: nodeId,
       type: 'genericNode',
       position,
       data: {
         id: nodeId,
-        type: component,
+        type: className, // ✅ "Prompt" NOT "Prompt Template"
         node: {
           template,
-          display_name: componentDef.display_name || component,
+          display_name: componentDef.display_name || className,
           description: componentDef.description || '',
           base_classes: componentDef.base_classes || [],
           outputs: componentDef.outputs || [],
@@ -461,98 +461,125 @@ export class FlowDiffEngine {
       throw new Error(`Node ${op.nodeId} not found in flow`);
     }
 
+    console.log('=== BEFORE UPDATE ===');
+    console.log('Node structure keys:', Object.keys(node.data));
+
     // Store template updates separately to preserve them during reconstruction
     const templateUpdates: Record<string, any> = {};
     
     if (op.updates.template && node.data?.node?.template) {
-      console.log(`Merging template updates for ${op.nodeId}`);
+    console.log(`Merging template updates for ${op.nodeId}`);
+    
+    for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
+      // ✅ REMOVE the restrictive check - always store the update
+      // Old: if (node.data.node.template[fieldName]) {
       
-      for (const [fieldName, fieldValue] of Object.entries(op.updates.template)) {
-        if (node.data.node.template[fieldName]) {
-          // Unwrap nested value objects
-          let actualValue = fieldValue;
-          if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
-            actualValue = (fieldValue as any).value;
-            console.log(`Unwrapped nested value for ${fieldName}: ${JSON.stringify(fieldValue)} -> ${actualValue}`);
-          }
-          
-          templateUpdates[fieldName] = actualValue;
-          node.data.node.template[fieldName].value = actualValue;
-          console.log(`Updated ${fieldName} = ${actualValue} (type: ${typeof actualValue})`);
-        } else {
-          console.warn(`Field ${fieldName} not found in component template`);
-        }
+      // Unwrap nested value objects
+      let actualValue = fieldValue;
+      if (typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue) {
+        actualValue = (fieldValue as any).value;
+        console.log(`Unwrapped nested value for ${fieldName}: ${JSON.stringify(fieldValue)} -> ${actualValue}`);
       }
       
-      // Remove template from updates to prevent duplicate processing
-      const { template, ...otherUpdates } = op.updates;
-      op.updates = otherUpdates;
+      // ✅ Always store in templateUpdates
+      templateUpdates[fieldName] = actualValue;
+      console.log(`Staged ${fieldName} = ${actualValue} (type: ${typeof actualValue})`);
+    }
+    
+    // ✅ Remove template from updates to prevent deep merge
+    delete op.updates.template;
+  }
+
+    // ✅ Apply template updates ONLY ONCE, at the end
+    if (Object.keys(templateUpdates).length > 0) {
+      if (!node.data.node?.template) {
+        console.warn(`Node ${op.nodeId} has no template, skipping updates`);
+        return flow;
+      }
+
+      // Simply update the template fields in place
+      for (const [fieldName, newValue] of Object.entries(templateUpdates)) {
+        // ✅ CREATE field if it doesn't exist (common with template-based flows)
+        if (!node.data.node.template[fieldName]) {
+          console.log(`Creating new template field: ${fieldName}`);
+          node.data.node.template[fieldName] = {
+            value: newValue,
+            type: typeof newValue === 'number' ? 'float' : 'str',
+            show: true,
+            required: false
+          };
+        } else {
+          console.log(`✅ Updating ${fieldName} in ${op.nodeId}`);
+          console.log(`   Old: ${JSON.stringify(node.data.node.template[fieldName].value).substring(0, 100)}...`);
+          console.log(`   New: ${JSON.stringify(newValue).substring(0, 100)}...`);
+          
+          // ✅ Update the value
+          node.data.node.template[fieldName].value = newValue;
+        }
+      }
+
+      // Mark node as edited
+      if (node.data.node) {
+        node.data.node.edited = true;
+        console.log(`✅ Marked node.data.node.edited = true for ${op.nodeId}`);
+      }
+
+      // ✅ ALSO set at node.data level (where Langflow's UI checks)
+      if (node.data) {
+        (node.data as any).edited = true;
+        console.log(`✅ Marked node.data.edited = true for ${op.nodeId}`);
+      }
+
+      console.log(`✅ Updated ${Object.keys(templateUpdates).length} template fields in ${op.nodeId}`);
     }
 
-    /**
-     * Deep merge utility for combining nested objects.
-     */
-    const deepMerge = (target: any, source: any): any => {
-      if (!source || typeof source !== 'object') return source;
-      if (!target || typeof target !== 'object') return source;
+    // ✅ Apply non-template updates (if any remain after template removal)
+    if (Object.keys(op.updates).length > 0) {
+      console.log(`Applying non-template updates:`, Object.keys(op.updates));
       
-      const result = { ...target };
-      
-      for (const key in source) {
-        if (source[key] === null || source[key] === undefined) {
-          continue;
-        }
+      // Deep merge utility
+      const deepMerge = (target: any, source: any): any => {
+        if (!source || typeof source !== 'object') return source;
+        if (!target || typeof target !== 'object') return source;
         
-        if (typeof source[key] !== 'object' || source[key] === null) {
-          if (target[key] !== undefined && typeof target[key] === 'object' && typeof source[key] !== 'object') {
-            console.warn(`Type mismatch for ${key}: target is object, source is ${typeof source[key]}. Skipping.`);
+        const result = { ...target };
+        
+        for (const key in source) {
+          if (source[key] === null || source[key] === undefined) {
             continue;
           }
-          result[key] = source[key];
-        } 
-        else if (typeof target[key] === 'object' && target[key] !== null) {
-          result[key] = deepMerge(target[key], source[key]);
-        } 
-        else {
-          result[key] = source[key];
-        }
-      }
-      
-      return result;
-    };
-
-    // Apply non-template updates
-    if (op.merge && node.data) {
-      node.data = deepMerge(node.data, op.updates);
-    } else {
-      Object.assign(node.data, op.updates);
-    }
-
-    // Reconstruct node from component catalog
-    const componentType = node.data?.type;
-    if (componentType && this.componentCatalog[componentType]) {
-      const componentTemplate = this.componentCatalog[componentType];
-      const nodeTemplate = JSON.parse(JSON.stringify(componentTemplate.template || {}));
-      
-      if (node.data.node?.template && nodeTemplate) {
-        // Iterate over the NEW template to ensure all fields are processed
-        for (const fieldName in nodeTemplate) {
-          if (templateUpdates.hasOwnProperty(fieldName)) {
-            nodeTemplate[fieldName].value = templateUpdates[fieldName];
-            console.log(`Applied saved update for ${fieldName}: ${templateUpdates[fieldName]}`);
-          } else if (node.data.node?.template?.[fieldName]?.value !== undefined) {
-            nodeTemplate[fieldName].value = node.data.node.template[fieldName].value;
+          
+          if (typeof source[key] !== 'object' || source[key] === null) {
+            result[key] = source[key];
+          } 
+          else if (typeof target[key] === 'object' && target[key] !== null) {
+            result[key] = deepMerge(target[key], source[key]);
+          } 
+          else {
+            result[key] = source[key];
           }
         }
-      }
-      
-      node.data.node = {
-        ...componentTemplate,
-        template: nodeTemplate
+        
+        return result;
       };
-      
-      delete (node.data.node as any).type;
-      delete (node.data.node as any).name;
+
+      if (op.merge && node.data) {
+        node.data = deepMerge(node.data, op.updates);
+      } else {
+        Object.assign(node.data, op.updates);
+      }
+    }
+
+    console.log('=== AFTER UPDATE ===');
+    console.log('Node structure keys:', Object.keys(node.data));
+
+    // ✅ CRITICAL: Remove any accidental nested data.data structure
+    if (Object.prototype.hasOwnProperty.call(node.data, 'data')) {
+      console.warn('⚠️  Detected nested data.data structure, removing it!');
+      console.log('Has node.data.data?', true);
+      delete (node.data as any).data;
+    } else {
+      console.log('Has node.data.data?', false);
     }
 
     return flow;
@@ -933,31 +960,28 @@ export class FlowDiffEngine {
           return issues;
         }
 
-        const componentType = node.data?.type;
-        if (componentType && !this.componentCatalog[componentType]) {
-          issues.push({
-            severity: 'error',
-            nodeId: op.nodeId,
-            message: `Node "${op.nodeId}" has unknown component type: "${componentType}"`,
-            fix: 'This node uses a component not in the catalog'
-          });
-        }
+        // ✅ SKIP CATALOG VALIDATION FOR UPDATES
+        // Updates modify existing nodes - they don't need catalog lookup
+        // The node already exists with a valid structure from when it was created
+        console.log(`✅ Skipping catalog validation for updateNode on ${op.nodeId}`);
 
-        if (op.updates.template && componentType && this.componentCatalog[componentType]) {
-          const component = this.componentCatalog[componentType];
-          const validFields = new Set(Object.keys(component.template || {}));
+        // Only validate template field names if template updates provided
+        if (op.updates.template && node.data?.node?.template) {
+          const nodeTemplate = node.data.node.template;
+          const unknownFields = Object.keys(op.updates.template).filter(
+            fieldName => !nodeTemplate[fieldName]
+          );
 
-          for (const fieldName of Object.keys(op.updates.template)) {
-            if (!validFields.has(fieldName)) {
-              issues.push({
-                severity: 'warning',
-                nodeId: op.nodeId,
-                message: `Unknown parameter "${fieldName}" for ${componentType}`,
-                fix: `Valid parameters: ${Array.from(validFields).join(', ')}`
-              });
-            }
+          if (unknownFields.length > 0) {
+            issues.push({
+              severity: 'warning',
+              nodeId: op.nodeId,
+              message: `Unknown template fields: ${unknownFields.join(', ')}`,
+              fix: 'Check the node template structure or remove unknown fields'
+            });
           }
         }
+        
         break;
       }
 

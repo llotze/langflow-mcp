@@ -6,6 +6,8 @@ import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
 import { FlowHistory } from './services/flowHistory.js';
+import Anthropic from '@anthropic-ai/sdk'; // Make sure you have this installed
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 
 /**
  * Flattens nested component catalog into a single-level map.
@@ -472,6 +474,93 @@ export class MCPTools {
       });
     } catch (err: any) {
       res.status(404).json({ success: false, error: err.message });
+    }
+  }
+
+  public async getChatHistory(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id } = req.body;
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const result = await fetch(apiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      const data = await result.json();
+      res.json({ success: true, data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  public async addChatMessage(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id, sender, message } = req.body;
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
+      const result = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({ flow_id, session_id, sender, message })
+      });
+      const data = await result.json();
+      res.json({ success: true, data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  public async getClaudeResponseWithHistory(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id } = req.body;
+
+      // 1. Fetch chat history
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const historyResp = await fetch(apiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      const historyData = await historyResp.json();
+
+      // 2. Format for Claude
+      const historyArray = Array.isArray(historyData) ? historyData : [];
+      const claudeMessages: MessageParam[] = historyArray.map((m: any) => ({
+        role: m.sender === "user" ? "user" as const : "assistant" as const,
+        content: String(m.message)
+      }));
+
+      // ---- FIX: instantiate Anthropic here ----
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        messages: claudeMessages
+      });
+
+      // Extract the first text block from the response
+      const textBlock = response.content.find(
+        (block: any) => block.type === "text" && typeof (block as any).text === "string"
+      );
+      const assistantMsg = textBlock ? (textBlock as { text: string }).text : "No response from Claude.";
+
+      // 5. Store assistant message
+      await fetch(`${process.env.LANGFLOW_API_URL}/api/v1/chat-history`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({
+          flow_id,
+          session_id,
+          sender: "assistant",
+          message: assistantMsg
+        })
+      });
+
+      res.json({ success: true, message: assistantMsg });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   }
 }

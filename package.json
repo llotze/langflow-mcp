@@ -32,6 +32,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@modelcontextprotocol/sdk": "^1.21.0",
     "@xyflow/react": "^12.9.2",
     "axios": "^1.13.2",
