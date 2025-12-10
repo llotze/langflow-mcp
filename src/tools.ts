@@ -746,17 +746,52 @@ AVAILABLE TOOLS:
 - get_component_details: Get detailed info about a component
 - get_flow_details: View the current flow structure
 
-When users ask to modify the flow, use the tweak_flow tool with the current flow_id (${flow_id}).
+⚠️ CRITICAL RULES FOR BUILDING FLOWS:
+
+1. ALWAYS use BULK operations when adding multiple nodes/edges:
+   - Use "addNodes" (NOT multiple "addNode")
+   - Use "addEdges" (NOT multiple "addEdge")
+   - Specify autoLayout: "horizontal" with spacing: 350
+
+2. NEVER use individual addNode operations in sequence - they will stack!
+
+3. Example for creating a chatbot:
+{
+  "operations": [
+    {
+      "type": "addNodes",
+      "nodes": [
+        { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+        { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+        { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+      ],
+      "autoLayout": "horizontal",
+      "spacing": 350
+    },
+    {
+      "type": "addEdges",
+      "edges": [
+        { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+        { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+      ]
+    }
+  ]
+}
+
+When users ask to modify the flow, use tweak_flow with the current flow_id (${flow_id}).
 Be helpful, concise, and proactive in suggesting improvements.`;
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     
-    // ✅ FIX: Loop until Claude sends a final message
     let currentMessages = [...claudeMessages];
-    let finalText = "";
+    let conversationHistory: any[] = [];
     let continueLoop = true;
+    const maxIterations = 10;
+    let iteration = 0;
     
-    while (continueLoop) {
+    while (continueLoop && iteration < maxIterations) {
+      iteration++;
+      
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-5-20250929",
         max_tokens: 4096,
@@ -765,16 +800,35 @@ Be helpful, concise, and proactive in suggesting improvements.`;
         messages: currentMessages
       });
 
-      // Check if Claude wants to stop
-      if (response.stop_reason === "end_turn" || response.stop_reason === "max_tokens") {
-        // Extract all text blocks from final response
+      conversationHistory.push({
+        role: "assistant",
+        content: response.content,
+        stop_reason: response.stop_reason
+      });
+
+      // ✅ FIX: Extract final text when Claude stops
+      if (response.stop_reason === "end_turn") {
+        let finalText = "";
         for (const block of response.content) {
           if (block.type === "text") {
             finalText += block.text;
           }
         }
-        continueLoop = false;
-        break;
+        console.log(`✅ Claude finished with ${finalText.length} chars`);
+        return { reply: finalText || "No response generated." };
+      }
+
+      if (response.stop_reason === "max_tokens") {
+        console.warn("⚠️ Hit max_tokens, returning accumulated text");
+        let accumulatedText = "";
+        for (const entry of conversationHistory) {
+          for (const block of entry.content) {
+            if (block.type === "text") {
+              accumulatedText += block.text + "\n\n";
+            }
+          }
+        }
+        return { reply: accumulatedText.trim() || "Response was truncated due to length." };
       }
 
       // Process tool uses
@@ -782,9 +836,7 @@ Be helpful, concise, and proactive in suggesting improvements.`;
       let hasTools = false;
 
       for (const block of response.content) {
-        if (block.type === "text") {
-          finalText += block.text; // Accumulate partial text
-        } else if (block.type === "tool_use") {
+        if (block.type === "tool_use") {
           hasTools = true;
           const toolName = block.name;
           const toolInput = block.input;
@@ -796,6 +848,7 @@ Be helpful, concise, and proactive in suggesting improvements.`;
             switch (toolName) {
               case "tweak_flow":
                 toolResult = await this.executeTweakFlow(toolInput);
+                console.log(`✅ tweak_flow result:`, toolResult);
                 break;
               case "search_components":
                 toolResult = await this.executeSearchComponents(toolInput);
@@ -810,6 +863,7 @@ Be helpful, concise, and proactive in suggesting improvements.`;
                 toolResult = { error: `Unknown tool: ${toolName}` };
             }
           } catch (err: any) {
+            console.error(`❌ Tool execution error:`, err);
             toolResult = { error: err.message };
           }
           
@@ -821,10 +875,18 @@ Be helpful, concise, and proactive in suggesting improvements.`;
         }
       }
 
-      // If no tools were used, we're done
+      // If no tools were used, something went wrong
       if (!hasTools) {
-        continueLoop = false;
-        break;
+        console.warn("⚠️ Claude stopped without tool use or end_turn");
+        let accumulatedText = "";
+        for (const entry of conversationHistory) {
+          for (const block of entry.content) {
+            if (block.type === "text") {
+              accumulatedText += block.text + "\n\n";
+            }
+          }
+        }
+        return { reply: accumulatedText.trim() || "No response generated." };
       }
 
       // Add assistant response and tool results to conversation
@@ -834,39 +896,45 @@ Be helpful, concise, and proactive in suggesting improvements.`;
       );
     }
 
-    return { reply: finalText || "No response from Claude." };
+    // If we hit max iterations, return accumulated text
+    console.warn("⚠️ Hit max iterations, returning accumulated response");
+    let accumulatedText = "";
+    for (const entry of conversationHistory) {
+      for (const block of entry.content) {
+        if (block.type === "text") {
+          accumulatedText += block.text + "\n\n";
+        }
+      }
+    }
+    return { reply: accumulatedText.trim() || "Response exceeded iteration limit." };
   }
 
   // ✅ ADD: Helper methods to execute tools
   private async executeTweakFlow(input: any) {
-    // ✅ Translate Claude's operation format to your internal format
-    const operations = input.operations.map((op: any) => {
-      // If Claude sends "operation" instead of "type", translate it
-      if (op.operation && !op.type) {
-        return {
-          ...op,
-          type: op.operation === 'update' ? 'updateNode' : op.operation,
-          // Remove the "operation" field
-          operation: undefined
-        };
-      }
-      return op;
-    });
-
     const mockReq = { 
       params: { flowId: input.flowId }, 
       body: { 
-        ...input,
-        operations // Use translated operations
+        flowId: input.flowId,
+        operations: input.operations,  // ← Make sure this is passing through correctly
+        validateAfter: false,
+        continueOnError: false
       } 
     };
     
     let result: any;
-    await this.tweakFlow(mockReq, {
+    const mockRes = {
       json: (data: any) => { result = data; },
-      status: (code: number) => ({ json: (data: any) => { result = data; } })
-    });
-    return result;
+      status: (code: number) => ({ 
+        json: (data: any) => { 
+          result = { ...data, statusCode: code }; 
+          return mockRes;
+        } 
+      })
+    };
+    
+    await this.tweakFlow(mockReq, mockRes);
+    
+    return result || { success: false, error: "No result from tweakFlow" };
   }
 
   private async executeSearchComponents(input: any) {
