@@ -6,15 +6,17 @@ import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
 import { FlowHistory } from './services/flowHistory.js';
-import Anthropic from '@anthropic-ai/sdk'; // Make sure you have this installed
+import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 
-/**
- * Flattens nested component catalog into a single-level map.
- * 
- * Converts Langflow's category-based structure into a flat lookup
- * for easier component access by name.
- */
+// Import the broadcast function
+let broadcastFlowUpdate: ((flowId: string, data: any) => void) | null = null;
+
+// Export a setter so server.ts can inject the broadcast function
+export function setBroadcastFunction(fn: (flowId: string, data: any) => void) {
+  broadcastFlowUpdate = fn;
+}
+
 function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent> {
   const flat: Record<string, LangflowComponent> = {};
   for (const category in catalog) {
@@ -35,22 +37,14 @@ export class MCPTools {
   private langflowApi?: LangflowApiService;
   private componentService?: LangflowComponentService;
   private flowBuilder?: LangflowFlowBuilder;
-  private flowHistory: FlowHistory;  // Add history
+  private flowHistory: FlowHistory;
 
-  /**
-   * Creates a new MCPTools instance.
-   * 
-   * @param _config - Reserved for future server configuration
-   * @param _logger - Reserved for future logging implementation
-   * @param langflowApiUrl - Langflow instance URL
-   * @param langflowApiKey - API key for authentication
-   */
   constructor(
     _config?: any,
     _logger?: any,
     langflowApiUrl?: string,
     langflowApiKey?: string,
-    flowHistory?: FlowHistory  // Accept optional history instance
+    flowHistory?: FlowHistory
   ) {
     if (langflowApiUrl && langflowApiKey) {
       this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
@@ -127,7 +121,7 @@ export class MCPTools {
                 const obj = JSON.parse(encoded.replace(/œ/g, '"'));
                 encoded = JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
               } catch {
-                // Leave as-is if not parseable
+                // Leave as-is
               }
             }
             return typeof encoded === 'string' ? encoded.replace(/\s+/g, '') : encoded;
@@ -260,6 +254,19 @@ export class MCPTools {
       }
       
       const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
+      
+      // EMIT SSE EVENT AFTER SUCCESSFUL UPDATE
+      if (broadcastFlowUpdate) {
+        console.log(`Broadcasting flow update for ${flowId}`);
+        broadcastFlowUpdate(flowId, {
+          type: 'flow_updated',
+          flowId: updated.id,
+          nodes: updated.data?.nodes || [],
+          edges: updated.data?.edges || [],
+          operationsApplied: result.operationsApplied,
+          timestamp: new Date().toISOString()
+        });
+      }
       
       res.json({ 
         success: true, 
@@ -516,7 +523,7 @@ export class MCPTools {
       const { reply } = await this.runClaudeWithHistory({
         flow_id,
         session_id,
-        userMessage: undefined, // legacy path (no new user message provided)
+        userMessage: undefined,
       });
 
       // 5. Store assistant message
@@ -558,7 +565,7 @@ export class MCPTools {
         headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
       });
       const historyData = await historyResp.json();
-      const historyArray: any[] = Array.isArray(historyData) ? historyData : []; // ✅ Type it explicitly
+      const historyArray: any[] = Array.isArray(historyData) ? historyData : [];
 
       // 2. Add user message to history via Langflow API
       const addMsgUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
@@ -589,7 +596,7 @@ export class MCPTools {
         flow_id,
         session_id,
         userMessage,
-        history: historyArray, // ✅ Now properly typed as any[]
+        history: historyArray,
         flow
       });
 
@@ -666,12 +673,12 @@ export class MCPTools {
                   type: { 
                     type: "string" as const,
                     enum: ["updateNode", "addNode", "removeNode", "addEdge", "removeEdge"] as const,
-                    description: "Operation type - use 'updateNode' to modify node parameters"
+                    description: "Operation type"
                   },
-                  nodeId: { type: "string" as const, description: "Node ID to modify" },
+                  nodeId: { type: "string" as const, description: "Node ID" },
                   updates: {
                     type: "object" as const,
-                    description: "Updates to apply - use 'template' key for parameter changes",
+                    description: "Updates to apply",
                     properties: {
                       template: {
                         type: "object" as const,
@@ -806,7 +813,6 @@ Be helpful, concise, and proactive in suggesting improvements.`;
         stop_reason: response.stop_reason
       });
 
-      // ✅ FIX: Extract final text when Claude stops
       if (response.stop_reason === "end_turn") {
         let finalText = "";
         for (const block of response.content) {
@@ -909,13 +915,13 @@ Be helpful, concise, and proactive in suggesting improvements.`;
     return { reply: accumulatedText.trim() || "Response exceeded iteration limit." };
   }
 
-  // ✅ ADD: Helper methods to execute tools
+  // Helper methods to execute tools
   private async executeTweakFlow(input: any) {
     const mockReq = { 
       params: { flowId: input.flowId }, 
       body: { 
         flowId: input.flowId,
-        operations: input.operations,  // ← Make sure this is passing through correctly
+        operations: input.operations,
         validateAfter: false,
         continueOnError: false
       } 

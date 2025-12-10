@@ -1,15 +1,37 @@
 import express, { Express, Request, Response } from 'express';
 import { loadConfig } from '../core/config.js';
-import { MCPTools } from '../tools.js';
+import { MCPTools, setBroadcastFunction } from '../tools.js';
 import { FlowHistory } from '../services/flowHistory.js';
 import cors from 'cors';
 
+// SSE clients registry
+const sseClients = new Map<string, Set<Response>>();
+
+/**
+ * Broadcasts a flow update event to all subscribers of a specific flow.
+ */
+export function broadcastFlowUpdate(flowId: string, data: any) {
+  const clients = sseClients.get(flowId);
+  if (!clients || clients.size === 0) {
+    console.log(`No SSE clients subscribed to flow ${flowId}`);
+    return;
+  }
+  
+  const payload = `data: ${JSON.stringify(data)}\n\n`;
+  console.log(`Broadcasting to ${clients.size} clients for flow ${flowId}`);
+  
+  clients.forEach(client => {
+    try {
+      client.write(payload);
+    } catch (err) {
+      console.error('Failed to write to SSE client:', err);
+      clients.delete(client);
+    }
+  });
+}
+
 /**
  * Starts the Langflow MCP REST API server.
- * 
- * Initializes an Express server that exposes MCP tools as REST endpoints.
- * This server runs independently of the stdio MCP server and provides
- * HTTP access to all Langflow operations including flow history management.
  */
 async function main() {
   console.log('Starting Langflow MCP Server...');
@@ -18,10 +40,8 @@ async function main() {
   const { langflowApiKey, ...safeConfig } = config;
   console.log('Configuration loaded:', { ...safeConfig, langflowApiKey: langflowApiKey ? '[SET]' : '[NOT SET]' });
 
-  // Initialize shared history instance
   const flowHistory = new FlowHistory();
 
-  // Initialize MCP tools with Langflow API credentials and history
   const mcpTools = new MCPTools(
     undefined,
     undefined, 
@@ -30,23 +50,62 @@ async function main() {
     flowHistory
   );
 
+  setBroadcastFunction(broadcastFlowUpdate);
+
   const app: Express = express();
   app.use(cors({
-    origin: 'http://localhost:3000', // Vite dev UI
+    origin: ['http://localhost:3000', 'http://localhost:7860'],
     methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'x-api-key'],
+    credentials: true,
   }));
   app.use(express.json());
 
   /**
    * Health check endpoint.
-   * Returns server status and Langflow API connectivity.
    */
   app.get('/health', (req: Request, res: Response) => {
     res.json({
       status: 'ok',
       message: 'Langflow MCP Server is running',
       langflowApiEnabled: !!config.langflowApiUrl && !!config.langflowApiKey
+    });
+  });
+
+  /**
+   * SSE endpoint for flow updates.
+   * Clients subscribe to real-time flow changes.
+   */
+  app.get('/mcp/api/flow-updates/:flowId', (req: Request, res: Response) => {
+    const { flowId } = req.params;
+    
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    // Register client
+    if (!sseClients.has(flowId)) {
+      sseClients.set(flowId, new Set());
+    }
+    sseClients.get(flowId)!.add(res);
+    
+    console.log(`SSE client connected to flow ${flowId}. Total clients: ${sseClients.get(flowId)!.size}`);
+
+    // Send initial connection event
+    res.write(`data: ${JSON.stringify({ type: 'connected', flowId })}\n\n`);
+
+    // Handle client disconnect
+    req.on('close', () => {
+      const clients = sseClients.get(flowId);
+      if (clients) {
+        clients.delete(res);
+        console.log(`SSE client disconnected from flow ${flowId}. Remaining: ${clients.size}`);
+        if (clients.size === 0) {
+          sseClients.delete(flowId);
+        }
+      }
     });
   });
 
@@ -100,7 +159,6 @@ async function main() {
           return;
         }
         
-        // Apply the previous state to Langflow
         mcpTools['langflowApi']?.updateFlow(flowId, previousState)
           .then(() => {
             res.json({
@@ -131,7 +189,6 @@ async function main() {
           return;
         }
         
-        // Apply the next state to Langflow
         mcpTools['langflowApi']?.updateFlow(flowId, nextState)
           .then(() => {
             res.json({
@@ -162,7 +219,6 @@ async function main() {
           return;
         }
         
-        // Apply the target state to Langflow
         mcpTools['langflowApi']?.updateFlow(flowId, targetState)
           .then(() => {
             res.json({
@@ -215,6 +271,11 @@ async function main() {
   // Graceful shutdown
   process.on('SIGINT', () => {
     console.log('Shutting down gracefully...');
+    sseClients.forEach((clients, flowId) => {
+      clients.forEach(client => {
+        client.end();
+      });
+    });
     process.exit(0);
   });
 }
