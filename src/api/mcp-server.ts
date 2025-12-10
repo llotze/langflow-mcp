@@ -510,6 +510,19 @@ async function main() {
           },
           required: ['flow_id', 'session_id']
         }
+      },
+      {
+        name: 'assistant_chat',
+        description: 'Calls the MCP assistant to generate a response (no flow execution).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' },
+            message: { type: 'string', description: 'User message' }
+          },
+          required: ['flow_id', 'session_id', 'message']
+        }
       }
     ],
   }));
@@ -1004,6 +1017,17 @@ async function main() {
               text: JSON.stringify(result, null, 2) 
             }] 
           };
+        }
+
+        case 'assistant_chat': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { body: args };
+          let result: any;
+          await mcpTools.assistant(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
 
         default:

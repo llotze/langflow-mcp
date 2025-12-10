@@ -2,6 +2,7 @@ import express, { Express, Request, Response } from 'express';
 import { loadConfig } from '../core/config.js';
 import { MCPTools } from '../tools.js';
 import { FlowHistory } from '../services/flowHistory.js';
+import cors from 'cors';
 
 /**
  * Starts the Langflow MCP REST API server.
@@ -30,6 +31,11 @@ async function main() {
   );
 
   const app: Express = express();
+  app.use(cors({
+    origin: 'http://localhost:3000', // Vite dev UI
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'x-api-key'],
+  }));
   app.use(express.json());
 
   /**
@@ -55,6 +61,7 @@ async function main() {
     app.post('/mcp/api/tweak-flow/:flowId', (req: Request, res: Response) => mcpTools.tweakFlow(req, res));
     app.post('/mcp/api/run-flow/:flowId', (req: Request, res: Response) => mcpTools.runFlow(req, res));
     app.get('/mcp/api/flow-details/:flowId', (req: Request, res: Response) => mcpTools.getFlowDetails(req, res));
+    app.post('/mcp/api/assistant', (req: Request, res: Response) => mcpTools.assistant(req, res));
     
     // Flow History Management
     app.get('/mcp/api/flow-history/:flowId', (req: Request, res: Response) => {

@@ -513,35 +513,11 @@ export class MCPTools {
   public async getClaudeResponseWithHistory(req: any, res: any): Promise<void> {
     try {
       const { flow_id, session_id } = req.body;
-
-      // 1. Fetch chat history
-      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
-      const historyResp = await fetch(apiUrl, {
-        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      const { reply } = await this.runClaudeWithHistory({
+        flow_id,
+        session_id,
+        userMessage: undefined, // legacy path (no new user message provided)
       });
-      const historyData = await historyResp.json();
-
-      // 2. Format for Claude
-      const historyArray = Array.isArray(historyData) ? historyData : [];
-      const claudeMessages: MessageParam[] = historyArray.map((m: any) => ({
-        role: m.sender === "user" ? "user" as const : "assistant" as const,
-        content: String(m.message)
-      }));
-
-      // ---- FIX: instantiate Anthropic here ----
-      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-      const response = await anthropic.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        messages: claudeMessages
-      });
-
-      // Extract the first text block from the response
-      const textBlock = response.content.find(
-        (block: any) => block.type === "text" && typeof (block as any).text === "string"
-      );
-      const assistantMsg = textBlock ? (textBlock as { text: string }).text : "No response from Claude.";
 
       // 5. Store assistant message
       await fetch(`${process.env.LANGFLOW_API_URL}/api/v1/chat-history`, {
@@ -554,14 +530,133 @@ export class MCPTools {
           flow_id,
           session_id,
           sender: "assistant",
-          message: assistantMsg
+          message: reply
         })
       });
 
-      res.json({ success: true, message: assistantMsg });
+      res.json({ success: true, message: reply });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  }
+
+  /**
+   * Unified assistant endpoint for Langflow-AI chat panel.
+   */
+  public async assistant(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id, message } = req.body || {};
+
+      if (!flow_id || !session_id || !message) {
+        res.status(400).json({
+          success: false,
+          error: "flow_id, session_id, and message are required",
+        });
+        return;
+      }
+
+      // Load chat history
+      const historyResp = await fetch(
+        `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`,
+        { headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" } }
+      );
+      const historyData = await historyResp.json();
+      const historyArray = Array.isArray(historyData) ? historyData : [];
+
+      // Load flow (context for future tool use / validation)
+      const flow = await this.langflowApi!.getFlow(flow_id);
+
+      // Call Claude with history + new user message
+      const { reply } = await this.runClaudeWithHistory({
+        flow_id,
+        session_id,
+        userMessage: message,
+        history: historyArray,
+        flow,
+      });
+
+      // Persist user + assistant messages
+      await this.persistChatMessage(flow_id, session_id, "user", message);
+      await this.persistChatMessage(flow_id, session_id, "assistant", reply);
+
+      res.json({
+        success: true,
+        reply,
+        flow_id,
+        session_id,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Core Claude call with optional injected history and flow.
+   */
+  private async runClaudeWithHistory(params: {
+    flow_id: string;
+    session_id: string;
+    userMessage?: string;
+    history?: any[];
+    flow?: any;
+  }): Promise<{ reply: string }> {
+    const { flow_id, session_id, userMessage, history } = params;
+
+    // 1) Fetch history if not provided
+    let historyArray: any = history;
+    if (!historyArray) {
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const historyResp = await fetch(apiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      historyArray = (await historyResp.json()) as any;
+    }
+
+    const normalizedHistory = Array.isArray(historyArray) ? historyArray : [];
+
+    // 2) Build Claude messages (history + latest user message)
+    const claudeMessages: MessageParam[] = normalizedHistory.map((m: any) => ({
+      role: m.sender === "user" ? "user" as const : "assistant" as const,
+      content: String(m.message)
+    }));
+
+    if (userMessage) {
+      claudeMessages.push({
+        role: "user",
+        content: userMessage,
+      });
+    }
+
+    // 3) Call Claude
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-5-20250929",
+      max_tokens: 1024,
+      messages: claudeMessages
+    });
+
+    const textBlock = response.content.find(
+      (block: any) => block.type === "text" && typeof (block as any).text === "string"
+    );
+    const assistantMsg = textBlock ? (textBlock as { text: string }).text : "No response from Claude.";
+
+    return { reply: assistantMsg };
+  }
+
+  private async persistChatMessage(flow_id: string, session_id: string, sender: string, message: string) {
+    await fetch(`${process.env.LANGFLOW_API_URL}/api/v1/chat-history`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.LANGFLOW_API_KEY || ""
+      },
+      body: JSON.stringify({
+        flow_id,
+        session_id,
+        sender,
+        message
+      })
+    });
   }
 }
 
