@@ -107,33 +107,49 @@ export class FlowDiffEngine {
     const snapshot = this.cloneFlow(result.flow);
 
     try {
-      // Pre-validate all operations before applying any changes
-      console.log(`Validating ${request.operations.length} operations...`);
-
-      for (let i = 0; i < request.operations.length; i++) {
-        const operation = request.operations[i];
-        const issues = await this.validateOperation(operation, result.flow);
-        
-        // Collect errors and warnings
-        const errors = issues.filter(issue => issue.severity === 'error');
-        const warnings = issues.filter(issue => issue.severity === 'warning');
-
-        if (errors.length > 0) {
-          result.errors.push(
-            `Operation ${i} (${operation.type}) validation failed:`,
-            ...errors.map(e => `  - ${e.message}`)
-          );
-          result.failed.push(i);
-        }
-
-        if (warnings.length > 0) {
-          result.warnings.push(
-            `Operation ${i} (${operation.type}) warnings:`,
-            ...warnings.map(w => `  - ${w.message}`)
-          );
+      // Explicitly type as Set<string>
+      const futureNodeIds: Set<string> = new Set(
+        result.flow.data.nodes.map((n: FlowNode) => n.id)
+      );
+      
+      // Add nodes that will be created by addNode/addNodes operations
+      for (const op of request.operations) {
+        if (op.type === 'addNode') {
+          const nodeOp = op as AddNodeOperation;
+          const nodeId = this.isSimplifiedNodeOp(nodeOp) ? nodeOp.nodeId : nodeOp.node.id;
+          futureNodeIds.add(nodeId);
+        } else if (op.type === 'addNodes') {
+          const bulkOp = op as AddNodesOperation;
+          for (const node of bulkOp.nodes) {
+            futureNodeIds.add(node.nodeId);
+          }
         }
       }
 
+      // Pre-validate all operations with future state awareness
+      console.log(`Validating ${request.operations.length} operations...`);
+
+      for (let i = 0; i < request.operations.length; i++) {
+        const op = request.operations[i];
+        
+        // Pass futureNodeIds to validator
+        const issues = await this.validateOperation(op, result.flow, futureNodeIds);
+        
+        if (issues.length > 0) {
+          const errors = issues.filter(iss => iss.severity === 'error');
+          const warnings = issues.filter(iss => iss.severity === 'warning');
+          
+          if (errors.length > 0) {
+            result.errors.push(
+              `Operation ${i} (${op.type}) validation failed:`,
+              ...errors.map(e => `  - ${e.message}`)
+            );
+          }
+          
+          result.warnings.push(...warnings.map(w => w.message));
+        }
+      }
+      
       // Abort if any validation errors occurred
       if (result.errors.length > 0) {
         console.log(`Pre-validation failed: ${result.errors.length} errors found`);
@@ -871,7 +887,8 @@ export class FlowDiffEngine {
    */
   private async validateOperation(
     operation: FlowDiffOperation,
-    flow: LangflowFlow
+    flow: LangflowFlow,
+    futureNodeIds?: Set<string>
   ): Promise<Array<{ severity: 'error' | 'warning'; message: string; nodeId?: string; fix?: string }>> {
     const issues: Array<{ severity: 'error' | 'warning'; message: string; nodeId?: string; fix?: string }> = [];
 
@@ -1246,27 +1263,21 @@ export class FlowDiffEngine {
             continue;
           }
 
-          if (!flow.data.nodes.some(n => n.id === edgeSpec.source)) {
+          const sourceExists = flow.data.nodes.some(n => n.id === edgeSpec.source) ||
+                           (futureNodeIds?.has(edgeSpec.source) ?? false);
+          const targetExists = flow.data.nodes.some(n => n.id === edgeSpec.target) ||
+                           (futureNodeIds?.has(edgeSpec.target) ?? false);
+          
+          if (!sourceExists) {
             issues.push({
               severity: 'error',
               message: `Source node not found: ${edgeSpec.source}`,
-              fix: 'Add source node first'
             });
           }
-
-          if (!flow.data.nodes.some(n => n.id === edgeSpec.target)) {
+          if (!targetExists) {
             issues.push({
               severity: 'error',
               message: `Target node not found: ${edgeSpec.target}`,
-              fix: 'Add target node first'
-            });
-          }
-
-          if (edgeSpec.source === edgeSpec.target) {
-            issues.push({
-              severity: 'error',
-              message: `Node ${edgeSpec.source} cannot connect to itself`,
-              fix: 'Use different source and target'
             });
           }
         }
