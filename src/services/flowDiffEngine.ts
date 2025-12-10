@@ -824,16 +824,24 @@ export class FlowDiffEngine {
   private applyRemoveEdge(flow: LangflowFlow, op: RemoveEdgeOperation): LangflowFlow {
     const { source, target, sourceHandle, targetHandle } = op;
 
-    const edgeIndex = flow.data.edges.findIndex(
-      e =>
-        e.source === source &&
-        e.target === target &&
-        (sourceHandle === undefined || e.sourceHandle === sourceHandle) &&
-        (targetHandle === undefined || e.targetHandle === targetHandle)
-    );
+    // Normalize handles for comparison
+    const normalizedSourceHandle = this.normalizeHandle(sourceHandle);
+    const normalizedTargetHandle = this.normalizeHandle(targetHandle);
+
+    const edgeIndex = flow.data.edges.findIndex(e => {
+      const sourceMatch = e.source === source;
+      const targetMatch = e.target === target;
+      
+      const sourceHandleMatch = !normalizedSourceHandle || 
+                               this.normalizeHandle(e.sourceHandle) === normalizedSourceHandle;
+      const targetHandleMatch = !normalizedTargetHandle || 
+                               this.normalizeHandle(e.targetHandle) === normalizedTargetHandle;
+      
+      return sourceMatch && targetMatch && sourceHandleMatch && targetHandleMatch;
+    });
 
     if (edgeIndex === -1) {
-      throw new Error(`Edge from "${source}" to "${target}" not found`);
+      throw new Error(`Edge not found: ${source} -> ${target}`);
     }
 
     flow.data.edges.splice(edgeIndex, 1);
@@ -1091,20 +1099,38 @@ export class FlowDiffEngine {
       }
 
       case 'removeEdge': {
-        const op = operation as RemoveEdgeOperation;
+        const removeOp = operation as RemoveEdgeOperation;
         
-        const edgeExists = flow.data.edges.some(e =>
-          e.source === op.source &&
-          e.target === op.target &&
-          (op.sourceHandle === undefined || e.sourceHandle === op.sourceHandle) &&
-          (op.targetHandle === undefined || e.targetHandle === op.targetHandle)
-        );
-
-        if (!edgeExists) {
+        // Normalize handles for comparison
+        const normalizedSourceHandle = this.normalizeHandle(removeOp.sourceHandle);
+        const normalizedTargetHandle = this.normalizeHandle(removeOp.targetHandle);
+        
+        const edgeExists = flow.data.edges.some(e => {
+          const sourceMatch = e.source === removeOp.source;
+          const targetMatch = e.target === removeOp.target;
+          
+          // If handles are provided, check them too
+          const sourceHandleMatch = !normalizedSourceHandle || 
+                                   this.normalizeHandle(e.sourceHandle) === normalizedSourceHandle;
+          const targetHandleMatch = !normalizedTargetHandle || 
+                                   this.normalizeHandle(e.targetHandle) === normalizedTargetHandle;
+          
+          return sourceMatch && targetMatch && sourceHandleMatch && targetHandleMatch;
+        });
+        
+         if (!edgeExists) {
+          // ✅ IMPROVED: Show available edges from source node
+          const edgesFromSource = flow.data.edges.filter(e => e.source === removeOp.source);
+          const availableTargets = edgesFromSource.map(e => e.target).join(', ');
+          
+          const errorMsg = edgesFromSource.length > 0
+            ? `Cannot remove edge: no edge from "${removeOp.source}" to "${removeOp.target}". Available targets from ${removeOp.source}: ${availableTargets}`
+            : `Cannot remove edge: node "${removeOp.source}" has no outgoing edges`;
+          
           issues.push({
             severity: 'error',
-            message: `Cannot remove edge: no edge from "${op.source}" to "${op.target}"`,
-            fix: 'Check the source and target node IDs'
+            message: errorMsg,
+            fix: 'Use get_flow_details to see exact edge connections, including sourceHandle and targetHandle'
           });
         }
         break;
@@ -1580,5 +1606,22 @@ export class FlowDiffEngine {
     }
 
     return positions;
+  }
+
+  /**
+   * Normalizes a handle string to Langflow's œ encoding format.
+   */
+  private normalizeHandle(handle: string | null | undefined): string | undefined {
+    if (!handle) return undefined;  // ✅ Now handles null too
+    
+    // If already encoded with œ, return as-is
+    if (handle.includes('œ')) return handle;
+    
+    // If it's a JSON string with regular quotes, convert to œ encoding
+    if (handle.startsWith('{') && handle.includes('"')) {
+      return handle.replace(/"/g, 'œ');
+    }
+    
+    return handle;
   }
 }
