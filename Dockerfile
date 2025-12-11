@@ -1,25 +1,21 @@
-FROM node:18-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json package-lock.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (use --no-cache to force fresh install)
+RUN npm ci --only=production --no-cache
 
-# Copy source code
+# Copy source
 COPY . .
 
 # Build TypeScript
 RUN npm run build
 
 # Expose port
-EXPOSE 3000
-
-# Set environment variables
-ENV PORT=3000
-ENV NODE_ENV=production
+EXPOSE 3001
 
 # Start server
-CMD ["npm", "start"]
+CMD ["node", "dist/api/server.js"]
