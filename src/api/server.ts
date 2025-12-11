@@ -68,7 +68,8 @@ async function main() {
 
   const app: Express = express();
   app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:7860', /\.railway\.app$/, /\.vercel\.app$/],
+    origin: ['http://localhost:3000', 'http://localhost:7860','https://www.graceful-ai.com',
+              'https://graceful-ai.com',  /\.railway\.app$/, /\.vercel\.app$/],
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'x-api-key', 'Authorization'],
     credentials: true,
