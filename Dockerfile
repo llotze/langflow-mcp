@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json ./
 
-# Install dependencies (use --no-cache to force fresh install)
-RUN npm ci --only=production --no-cache
+# Install dependencies
+RUN npm ci --only=production
 
 # Copy source
 COPY . .
