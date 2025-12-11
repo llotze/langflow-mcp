@@ -19,7 +19,7 @@ import {
   AddEdgesOperation,
   RemoveEdgesOperation
 } from '../types/flowDiff.js';
-import { FlowValidator, ValidationResult } from './flowValidator.js';
+import { FlowValidator, ValidationResult, ValidationIssue } from './flowValidator.js';  
 import { FlowHistory } from './flowHistory.js';
 import { findComponentInCatalog } from '../utils/componentNameMapping.js';
 
@@ -897,8 +897,8 @@ export class FlowDiffEngine {
     operation: FlowDiffOperation,
     flow: LangflowFlow,
     futureNodeIds?: Set<string>
-  ): Promise<Array<{ severity: 'error' | 'warning'; message: string; nodeId?: string; fix?: string }>> {
-    const issues: Array<{ severity: 'error' | 'warning'; message: string; nodeId?: string; fix?: string }> = [];
+  ): Promise<ValidationIssue[]> {  
+    const issues: ValidationIssue[] = [];  
 
     switch (operation.type) {
       case 'addNode': {
@@ -1101,38 +1101,9 @@ export class FlowDiffEngine {
       case 'removeEdge': {
         const removeOp = operation as RemoveEdgeOperation;
         
-        // Normalize handles for comparison
-        const normalizedSourceHandle = this.normalizeHandle(removeOp.sourceHandle);
-        const normalizedTargetHandle = this.normalizeHandle(removeOp.targetHandle);
-        
-        const edgeExists = flow.data.edges.some(e => {
-          const sourceMatch = e.source === removeOp.source;
-          const targetMatch = e.target === removeOp.target;
-          
-          // If handles are provided, check them too
-          const sourceHandleMatch = !normalizedSourceHandle || 
-                                   this.normalizeHandle(e.sourceHandle) === normalizedSourceHandle;
-          const targetHandleMatch = !normalizedTargetHandle || 
-                                   this.normalizeHandle(e.targetHandle) === normalizedTargetHandle;
-          
-          return sourceMatch && targetMatch && sourceHandleMatch && targetHandleMatch;
-        });
-        
-         if (!edgeExists) {
-          // ✅ IMPROVED: Show available edges from source node
-          const edgesFromSource = flow.data.edges.filter(e => e.source === removeOp.source);
-          const availableTargets = edgesFromSource.map(e => e.target).join(', ');
-          
-          const errorMsg = edgesFromSource.length > 0
-            ? `Cannot remove edge: no edge from "${removeOp.source}" to "${removeOp.target}". Available targets from ${removeOp.source}: ${availableTargets}`
-            : `Cannot remove edge: node "${removeOp.source}" has no outgoing edges`;
-          
-          issues.push({
-            severity: 'error',
-            message: errorMsg,
-            fix: 'Use get_flow_details to see exact edge connections, including sourceHandle and targetHandle'
-          });
-        }
+        // ✅ Calls the smart validator that detects nodeId/edgeId
+        const validationIssues = this.validator.validateRemoveEdgeOperation(removeOp, flow);
+        issues.push(...validationIssues);
         break;
       }
 

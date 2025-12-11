@@ -107,87 +107,131 @@ async function main() {
         name: 'tweak_flow',
         description: `Edit an existing Langflow flow by applying operations.
 
-      IMPORTANT: Use "updates" field, NOT "params"!
+⚠️ CRITICAL: Edge Removal Rules
 
-      EXAMPLE - Update Prompt Template:
-      {
-        "flowId": "abc-123",
-        "operations": [{
-          "type": "updateNode",
-          "nodeId": "Prompt-xyz",
-          "updates": {
-            "data": {
-              "node": {
-                "template": {
-                  "template": {
-                    "value": "Your new prompt text here"
-                  }
-                }
-              }
-            }
-          },
-          "merge": true
-        }]
+CORRECT removeEdge format (ONLY these fields):
+{
+  "type": "removeEdge",
+  "source": "embeddings_1",     // Source node ID
+  "target": "vector_store_1"    // Target node ID
+}
+
+WRONG formats that will FAIL (DO NOT USE):
+{
+  "type": "removeEdge",
+  "nodeId": "..."               // ❌ Field doesn't exist!
+}
+{
+  "type": "removeEdge",
+  "edgeId": "reactflow__edge-..."  // ❌ Field doesn't exist!
+}
+
+The internal edge ID (reactflow__edge-...) cannot be used directly.
+You MUST specify both source and target node IDs.
+
+If you need to be specific about which connection:
+{
+  "type": "removeEdge",
+  "source": "embeddings_1",
+  "target": "vector_store_1",
+  "sourceHandle": "embeddings",  // Optional - from get_flow_details
+  "targetHandle": "embedding"    // Optional - from get_flow_details
+}
+
+SUPPORTED OPERATIONS:
+
+1. Add Single Node:
+{
+  "type": "addNode",
+  "nodeId": "openai_1",
+  "component": "OpenAIModel",
+  "params": { "model_name": "gpt-4o-mini" },
+  "position": { "x": 400, "y": 200 }
+}
+
+2. Update Node - IMPORTANT: Use "updates" field:
+{
+  "type": "updateNode",
+  "nodeId": "Prompt-xyz",
+  "updates": {
+    "data": {
+      "node": {
+        "template": {
+          "template": {
+            "value": "Your new prompt text here"
+          }
+        }
       }
+    }
+  },
+  "merge": true
+}
 
-      For Prompt Template components, the path is:
-      updates.data.node.template.template.value
+3. Add Single Edge:
+{
+  "type": "addEdge",
+  "source": "node1",           // Source node ID
+  "target": "node2",           // Target node ID
+  "targetParam": "input_value" // Target parameter name
+}
 
-      SUPPORTED OPERATIONS:
+4. Remove Single Edge - CORRECT FORMAT:
+{
+  "type": "removeEdge",
+  "source": "embeddings_1",    // Source node ID
+  "target": "vector_store_1"   // Target node ID
+}
 
-      1. Add Single Node:
-      {
-        "type": "addNode",
-        "nodeId": "openai_1",
-        "component": "OpenAIModel",
-        "params": { "model_name": "gpt-4o-mini" },
-        "position": { "x": 400, "y": 200 }
-      }
+5. Bulk Add Nodes:
+{
+  "type": "addNodes",
+  "nodes": [
+    { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+    { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+    { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+  ],
+  "autoLayout": "horizontal",
+  "spacing": 350
+}
 
-      2. Bulk Add Nodes:
-      {
-        "type": "addNodes",
-        "nodes": [
-          { "nodeId": "input_1", "component": "ChatInput", "params": {} },
-          { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
-          { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
-        ],
-        "autoLayout": "horizontal",
-        "spacing": 350
-      }
+6. Bulk Remove Nodes:
+{
+  "type": "removeNodes",
+  "nodeIds": ["node1", "node2", "node3"],
+  "removeConnections": true
+}
 
-      3. Bulk Remove Nodes:
-      {
-        "type": "removeNodes",
-        "nodeIds": ["node1", "node2", "node3"],
-        "removeConnections": true
-      }
+7. Bulk Add Edges:
+{
+  "type": "addEdges",
+  "edges": [
+    { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+    { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+  ]
+}
 
-      4. Bulk Add Edges:
-      {
-        "type": "addEdges",
-        "edges": [
-          { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
-          { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
-        ]
-      }
+8. Bulk Remove Edges - CORRECT FORMAT:
+{
+  "type": "removeEdges",
+  "edges": [
+    { "source": "node1", "target": "node2" },  // Each edge needs source + target
+    { "source": "node2", "target": "node3" }
+  ]
+}
 
-      5. Bulk Remove Edges:
-      {
-        "type": "removeEdges",
-        "edges": [
-          { "source": "node1", "target": "node2" },
-          { "source": "node2", "target": "node3" }
-        ]
-      }
+EDGE OPERATION RULES:
+- Single edge: Use "removeEdge" with "source" and "target"
+- Multiple edges: Use "removeEdges" with "edges" array
+- NEVER use "nodeId" or "edgeId" for edge operations
+- The edge ID (like "reactflow__edge-...") is internal only and cannot be used
 
-      BENEFITS OF BULK OPERATIONS:
-      - 80-90% faster than individual operations
-      - Single validation pass
-      - Automatic layout positioning
-      - Better error handling
+BENEFITS OF BULK OPERATIONS:
+- 80-90% faster than individual operations
+- Single validation pass
+- Automatic layout positioning
+- Better error handling
 
-      IMPORTANT: Use bulk operations when adding/removing multiple items.`,
+IMPORTANT: Always use bulk operations when adding/removing multiple items.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -197,12 +241,13 @@ async function main() {
             },
             operations: {
               type: 'array',
-              description: 'Array of operations - MUST use "updates" field for updateNode operations',
+              description: 'Array of operations to apply to the flow',
               items: {
                 type: 'object',
                 properties: {
                   type: { 
                     type: 'string',
+                    description: 'Operation type',
                     enum: [
                       'addNode', 'updateNode', 'removeNode', 'moveNode',
                       'addEdge', 'removeEdge', 'updateMetadata',
@@ -210,14 +255,27 @@ async function main() {
                     ]
                   },
                   // Single node operations
-                  nodeId: { type: 'string' },
-                  component: { type: 'string' },
-                  params: { type: 'object' },
-                  position: { type: 'object' },
+                  nodeId: { 
+                    type: 'string',
+                    description: 'Node ID (for addNode, updateNode, removeNode, moveNode ONLY)'
+                  },
+                  component: { 
+                    type: 'string',
+                    description: 'Component type name (for addNode)'
+                  },
+                  params: { 
+                    type: 'object',
+                    description: 'Component parameters (for addNode)'
+                  },
+                  position: { 
+                    type: 'object',
+                    description: 'Node position {x, y}'
+                  },
                   
                   // Bulk node operations
                   nodes: {
                     type: 'array',
+                    description: 'Array of nodes (for addNodes)',
                     items: {
                       type: 'object',
                       properties: {
@@ -230,33 +288,86 @@ async function main() {
                   },
                   nodeIds: {
                     type: 'array',
+                    description: 'Array of node IDs (for removeNodes)',
                     items: { type: 'string' }
                   },
                   autoLayout: {
                     type: 'string',
+                    description: 'Auto-layout direction (for addNodes)',
                     enum: ['horizontal', 'vertical', 'grid']
                   },
-                  spacing: { type: 'number' },
+                  spacing: { 
+                    type: 'number',
+                    description: 'Spacing between nodes (for addNodes)'
+                  },
                   
-                  // Edge operations
+                  // Edge operations - CRITICAL: Only source and target are valid
+                  source: { 
+                    type: 'string',
+                    description: 'Source node ID (REQUIRED for addEdge and removeEdge)'
+                  },
+                  target: { 
+                    type: 'string',
+                    description: 'Target node ID (REQUIRED for addEdge and removeEdge)'
+                  },
+                  sourceHandle: {
+                    type: 'string',
+                    description: 'Optional source handle name (from get_flow_details)'
+                  },
+                  targetHandle: {
+                    type: 'string',
+                    description: 'Optional target handle name (from get_flow_details)'
+                  },
+                  targetParam: {
+                    type: 'string',
+                    description: 'Target parameter name (for addEdge, e.g., "input_value")'
+                  },
+                  
+                  // Bulk edge operations
                   edges: {
                     type: 'array',
+                    description: 'Array of edges (for addEdges or removeEdges)',
                     items: {
                       type: 'object',
                       properties: {
-                        source: { type: 'string' },
-                        target: { type: 'string' },
-                        targetParam: { type: 'string' }
-                      }
+                        source: { 
+                          type: 'string',
+                          description: 'Source node ID (REQUIRED)'
+                        },
+                        target: { 
+                          type: 'string',
+                          description: 'Target node ID (REQUIRED)'
+                        },
+                        sourceHandle: { 
+                          type: 'string',
+                          description: 'Optional source handle'
+                        },
+                        targetHandle: { 
+                          type: 'string',
+                          description: 'Optional target handle'
+                        },
+                        targetParam: { 
+                          type: 'string',
+                          description: 'Target parameter name (for addEdges)'
+                        }
+                      },
+                      required: ['source', 'target']
                     }
                   },
                   
                   // Other fields
-                  updates: { type: 'object' },
-                  merge: { type: 'boolean' },
-                  source: { type: 'string' },
-                  target: { type: 'string' },
-                  removeConnections: { type: 'boolean' }
+                  updates: { 
+                    type: 'object',
+                    description: 'Updates object (for updateNode)'
+                  },
+                  merge: { 
+                    type: 'boolean',
+                    description: 'Whether to merge updates with existing data (for updateNode)'
+                  },
+                  removeConnections: { 
+                    type: 'boolean',
+                    description: 'Whether to remove connected edges (for removeNodes)'
+                  }
                 }
               }
             }

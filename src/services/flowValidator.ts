@@ -99,6 +99,90 @@ export class FlowValidator {
   }
 
   /**
+   *  Validates a removeEdge operation with error messages
+   */
+  validateRemoveEdgeOperation(operation: any, flow: LangflowFlow): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+
+    // Check for invalid fields first
+    if ('nodeId' in operation || 'edgeId' in operation) {
+      const invalidFields = [];
+      if ('nodeId' in operation) invalidFields.push('nodeId');
+      if ('edgeId' in operation) invalidFields.push('edgeId');
+
+      issues.push({
+        severity: 'error',
+        message: `removeEdge operation uses invalid field(s): ${invalidFields.join(', ')}`,
+        fix: 'Use { type: "removeEdge", source: "node1", target: "node2" } instead'
+      });
+      return issues;
+    }
+
+    // Check for required fields
+    if (!operation.source || !operation.target) {
+      issues.push({
+        severity: 'error',
+        message: 'removeEdge operation requires both "source" and "target" fields',
+        fix: 'Provide source and target node IDs'
+      });
+      return issues;
+    }
+
+    // Normalize handles for comparison
+    const normalizedSourceHandle = this.normalizeHandle(operation.sourceHandle);  
+    const normalizedTargetHandle = this.normalizeHandle(operation.targetHandle);  
+
+    // Check if edge exists
+    const edgeExists = flow.data.edges?.some(e => {
+      const sourceMatch = e.source === operation.source;
+      const targetMatch = e.target === operation.target;
+
+      // If handles are provided, check them too
+      const sourceHandleMatch = !normalizedSourceHandle || 
+                               this.normalizeHandle(e.sourceHandle) === normalizedSourceHandle;
+      const targetHandleMatch = !normalizedTargetHandle || 
+                               this.normalizeHandle(e.targetHandle) === normalizedTargetHandle;
+
+      return sourceMatch && targetMatch && sourceHandleMatch && targetHandleMatch;
+    });
+
+    if (!edgeExists) {
+      // Show available edges from source node
+      const edgesFromSource = flow.data.edges?.filter(e => e.source === operation.source) || [];
+      
+      if (edgesFromSource.length > 0) {
+        const availableTargets = edgesFromSource.map(e => 
+          `"${e.target}" (handles: ${e.sourceHandle || 'default'} → ${e.targetHandle || 'default'})`
+        ).join(', ');
+
+        issues.push({
+          severity: 'error',
+          message: `Cannot remove edge from "${operation.source}" to "${operation.target}". Available edges from ${operation.source}: ${availableTargets}`,
+          fix: 'Use get_flow_details to see exact edge connections, including sourceHandle and targetHandle'
+        });
+      } else {
+        issues.push({
+          severity: 'error',
+          message: `Cannot remove edge: node "${operation.source}" has no outgoing edges`,
+          fix: 'Verify the source node ID is correct'
+        });
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Normalize handle strings for comparison
+   */
+  private normalizeHandle(handle: string | undefined | null): string | null {
+    if (!handle || handle === 'default' || handle === '') {
+      return null;
+    }
+    return handle;
+  }
+
+  /**
    * Validates a single node's structure, type, and parameters.
    * 
    * Ensures the node:
