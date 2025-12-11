@@ -280,8 +280,19 @@ async function main() {
     console.log('Langflow API integration disabled - missing API URL');
   }
 
-  app.listen(config.port, () => {
-    console.log(`✅ Server started successfully on http://localhost:${config.port}`);
+  // ✅ Use Railway's PORT env variable, fallback to 3001
+  const PORT = process.env.PORT ? parseInt(process.env.PORT) : config.port;
+
+  // ✅ Bind to 0.0.0.0 for Railway (allows external connections)
+  const HOST = process.env.HOST || '0.0.0.0';
+
+  app.listen(PORT, HOST, () => {
+    // ✅ Show Railway URL if available, otherwise localhost
+    const url = process.env.RAILWAY_PUBLIC_DOMAIN 
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : `http://${HOST}:${PORT}`;
+    
+    console.log(`✅ Server started successfully on ${url}`);
   });
 
   process.on('SIGINT', () => {

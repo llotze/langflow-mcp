@@ -17,8 +17,9 @@ RUN npm run build
 # Remove dev dependencies after build
 RUN npm prune --production
 
-# Expose port
+# ✅ Don't hardcode port - Railway provides it via $PORT
+# Expose port (Railway ignores this, uses $PORT)
 EXPOSE 3001
 
-# Start server
+# ✅ Railway will set $PORT automatically
 CMD ["node", "dist/api/server.js"]
