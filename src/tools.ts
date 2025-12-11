@@ -5,13 +5,18 @@ import type { LangflowComponent, FlowNode } from './types.js';
 import { listTemplates, loadTemplate } from './utils/templateLoader.js';
 import { FlowDiffEngine } from './services/flowDiffEngine.js';
 import { FlowValidator } from './services/flowValidator.js';
+import { FlowHistory } from './services/flowHistory.js';
+import Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 
-/**
- * Flattens nested component catalog into a single-level map.
- * 
- * Converts Langflow's category-based structure into a flat lookup
- * for easier component access by name.
- */
+// Import the broadcast function
+let broadcastFlowUpdate: ((flowId: string, data: any) => void) | null = null;
+
+// Export a setter so server.ts can inject the broadcast function
+export function setBroadcastFunction(fn: (flowId: string, data: any) => void) {
+  broadcastFlowUpdate = fn;
+}
+
 function flattenComponentCatalog(catalog: any): Record<string, LangflowComponent> {
   const flat: Record<string, LangflowComponent> = {};
   for (const category in catalog) {
@@ -32,26 +37,22 @@ export class MCPTools {
   private langflowApi?: LangflowApiService;
   private componentService?: LangflowComponentService;
   private flowBuilder?: LangflowFlowBuilder;
+  private flowHistory: FlowHistory;
 
-  /**
-   * Creates a new MCPTools instance.
-   * 
-   * @param _config - Reserved for future server configuration
-   * @param _logger - Reserved for future logging implementation
-   * @param langflowApiUrl - Langflow instance URL
-   * @param langflowApiKey - API key for authentication
-   */
   constructor(
     _config?: any,
     _logger?: any,
     langflowApiUrl?: string,
-    langflowApiKey?: string
+    langflowApiKey?: string,
+    flowHistory?: FlowHistory
   ) {
     if (langflowApiUrl && langflowApiKey) {
       this.langflowApi = new LangflowApiService(langflowApiUrl, langflowApiKey);
       this.componentService = new LangflowComponentService(this.langflowApi);
       this.flowBuilder = new LangflowFlowBuilder(this.componentService, this.langflowApi);
     }
+    
+    this.flowHistory = flowHistory || new FlowHistory();
   }
 
   /**
@@ -120,7 +121,7 @@ export class MCPTools {
                 const obj = JSON.parse(encoded.replace(/œ/g, '"'));
                 encoded = JSON.stringify(obj, Object.keys(obj).sort()).replace(/"/g, "œ");
               } catch {
-                // Leave as-is if not parseable
+                // Leave as-is
               }
             }
             return typeof encoded === 'string' ? encoded.replace(/\s+/g, '') : encoded;
@@ -164,7 +165,12 @@ export class MCPTools {
       const translated = translateTweakFlowRequest({ ...req.body, flowId: req.params.flowId || req.body.flowId });
       console.log("Translated tweakFlow request:", translated);
       const { flowId, operations, validateAfter = true, continueOnError = false } = translated;
-      
+
+      // Normalize updateNode operations
+      for (let i = 0; i < operations.length; i++) {
+        operations[i] = normalizeUpdateNodeOperation(operations[i]);
+      }
+
       // Pre-process operations to unwrap nested values
       for (const op of operations) {
         if (op.type === 'updateNode' && op.updates?.template) {
@@ -205,22 +211,6 @@ export class MCPTools {
       const rawCatalog = await this.componentService!.getAllComponents();
       const componentCatalog = flattenComponentCatalog(rawCatalog);
       
-      // Normalize component types (ensure data.type matches catalog)
-      for (const node of flow.data.nodes as FlowNode[]) {
-        if (node.type === "genericNode" && node.data?.node?.metadata?.module) {
-          const modulePath: string = node.data.node.metadata.module;
-          let className = modulePath.split('.').pop();
-          
-          if ((className === "PromptComponent" || className === "PromptTemplate") && componentCatalog["Prompt"]) {
-            className = "Prompt";
-          }
-          
-          if (className && componentCatalog[className] && node.data) {
-            console.log(`Setting data.type for ${node.id} to ${className}`);
-            node.data.type = className;
-          }
-        }
-      }
 
       // Remove nodes with invalid component types
       const validTypes = new Set(Object.keys(componentCatalog));
@@ -243,7 +233,8 @@ export class MCPTools {
       const componentCatalog2 = flattenComponentCatalog(rawCatalog2);
       const flowDiffEngine = new FlowDiffEngine(
         componentCatalog2,
-        new FlowValidator(componentCatalog2)
+        new FlowValidator(componentCatalog2),
+        this.flowHistory  // Pass history to engine
       );
       
       const result = await flowDiffEngine.applyDiff(diffRequest);
@@ -263,6 +254,19 @@ export class MCPTools {
       }
       
       const updated = await this.langflowApi!.updateFlow(flowId, result.flow);
+      
+      // EMIT SSE EVENT AFTER SUCCESSFUL UPDATE
+      if (broadcastFlowUpdate) {
+        console.log(`Broadcasting flow update for ${flowId}`);
+        broadcastFlowUpdate(flowId, {
+          type: 'flow_updated',
+          flowId: updated.id,
+          nodes: updated.data?.nodes || [],
+          edges: updated.data?.edges || [],
+          operationsApplied: result.operationsApplied,
+          timestamp: new Date().toISOString()
+        });
+      }
       
       res.json({ 
         success: true, 
@@ -479,6 +483,480 @@ export class MCPTools {
       res.status(404).json({ success: false, error: err.message });
     }
   }
+
+  public async getChatHistory(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id } = req.body;
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const result = await fetch(apiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      const data = await result.json();
+      res.json({ success: true, data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  public async addChatMessage(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id, sender, message } = req.body;
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
+      const result = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({ flow_id, session_id, sender, message })
+      });
+      const data = await result.json();
+      res.json({ success: true, data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  public async getClaudeResponseWithHistory(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id } = req.body;
+      const { reply } = await this.runClaudeWithHistory({
+        flow_id,
+        session_id,
+        userMessage: undefined,
+      });
+
+      // 5. Store assistant message
+      await fetch(`${process.env.LANGFLOW_API_URL}/api/v1/chat-history`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({
+          flow_id,
+          session_id,
+          sender: "assistant",
+          message: reply
+        })
+      });
+
+      res.json({ success: true, message: reply });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  /**
+   * Unified assistant endpoint for Langflow-AI chat panel.
+   */
+  public async assistant(req: any, res: any): Promise<void> {
+    try {
+      const { flow_id, session_id, message: userMessage } = req.body;
+      
+      if (!userMessage || typeof userMessage !== 'string') {
+        res.status(400).json({ success: false, error: 'message (string) is required' });
+        return;
+      }
+
+      // 1. Fetch existing history from Langflow
+      const historyApiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const historyResp = await fetch(historyApiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      const historyData = await historyResp.json();
+      const historyArray: any[] = Array.isArray(historyData) ? historyData : [];
+
+      // 2. Add user message to history via Langflow API
+      const addMsgUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
+      await fetch(addMsgUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({
+          flow_id,
+          session_id,
+          sender: "user",
+          message: userMessage
+        })
+      });
+
+      // 3. Optionally fetch flow data
+      let flow: any = null;
+      try {
+        flow = await this.langflowApi!.getFlow(flow_id);
+      } catch (err) {
+        console.warn(`Could not fetch flow ${flow_id}:`, err);
+      }
+
+      // 4. Call Claude with full context
+      const { reply } = await this.runClaudeWithHistory({
+        flow_id,
+        session_id,
+        userMessage,
+        history: historyArray,
+        flow
+      });
+
+      // 5. Store assistant response via Langflow API
+      await fetch(addMsgUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.LANGFLOW_API_KEY || ""
+        },
+        body: JSON.stringify({
+          flow_id,
+          session_id,
+          sender: "assistant",
+          message: reply
+        })
+      });
+
+      res.json({ success: true, reply });
+    } catch (err: any) {
+      console.error("assistant endpoint error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
+  /**
+   * Core Claude call with optional injected history and flow.
+   */
+  private async runClaudeWithHistory(params: {
+    flow_id: string;
+    session_id: string;
+    userMessage?: string;
+    history?: any[];
+    flow?: any;
+  }): Promise<{ reply: string }> {
+    const { flow_id, session_id, userMessage, history, flow } = params;
+
+    let historyArray: any[] = history || [];
+    if (!history) {
+      const apiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+      const historyResp = await fetch(apiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
+      const data = await historyResp.json();
+      historyArray = Array.isArray(data) ? data : [];
+    }
+
+    const claudeMessages: MessageParam[] = historyArray.map((m: any) => ({
+      role: m.sender === "user" ? "user" as const : "assistant" as const,
+      content: String(m.message)
+    }));
+
+    if (userMessage) {
+      claudeMessages.push({
+        role: "user",
+        content: userMessage,
+      });
+    }
+
+    const tools: Anthropic.Tool[] = [
+      {
+        name: "tweak_flow",
+        description: "Modify the current Langflow flow by applying operations (add/remove/update nodes and edges)",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            flowId: { type: "string" as const, description: "Flow ID to modify" },
+            operations: {
+              type: "array" as const,
+              description: "Array of operations to apply",
+              items: { 
+                type: "object" as const,
+                properties: {
+                  type: { 
+                    type: "string" as const,
+                    enum: ["updateNode", "addNode", "removeNode", "addEdge", "removeEdge"] as const,
+                    description: "Operation type"
+                  },
+                  nodeId: { type: "string" as const, description: "Node ID" },
+                  updates: {
+                    type: "object" as const,
+                    description: "Updates to apply",
+                    properties: {
+                      template: {
+                        type: "object" as const,
+                        description: "Template parameter updates"
+                      }
+                    }
+                  },
+                  merge: {
+                    type: "boolean" as const,
+                    description: "Whether to deep merge updates (default: true)"
+                  }
+                },
+                required: ["type", "nodeId"] as const
+              }
+            }
+          },
+          required: ["flowId", "operations"] as const
+        }
+      },
+      {
+        name: "search_components",
+        description: "Search for available Langflow components by keyword",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            keyword: { type: "string" as const, description: "Search term" }
+          },
+          required: ["keyword"]
+        }
+      },
+      {
+        name: "get_component_details",
+        description: "Get detailed template for a component",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            componentName: { type: "string" as const, description: "Component name" }
+          },
+          required: ["componentName"]
+        }
+      },
+      {
+        name: "get_flow_details",
+        description: "Get the current flow structure",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            flowId: { type: "string" as const, description: "Flow ID" }
+          },
+          required: ["flowId"]
+        }
+      }
+    ];
+
+    const systemPrompt = `You are Hopper, an AI assistant integrated into Langflow - a visual flow builder for AI applications.
+
+CURRENT CONTEXT:
+- You are chatting within Flow ID: ${flow_id}
+- Session ID: ${session_id}
+${flow ? `- Current flow name: ${flow.name || 'Untitled'}` : ''}
+
+YOUR CAPABILITIES:
+1. Answer questions about Langflow and AI workflows
+2. Help users build and modify flows using MCP tools
+3. Search for components and explain their usage
+4. Suggest improvements to the current flow
+5. Debug flow issues and provide solutions
+
+AVAILABLE TOOLS:
+- tweak_flow: Modify nodes/edges in the current flow
+- search_components: Find available Langflow components
+- get_component_details: Get detailed info about a component
+- get_flow_details: View the current flow structure
+
+⚠️ CRITICAL RULES FOR BUILDING FLOWS:
+
+1. ALWAYS use BULK operations when adding multiple nodes/edges:
+   - Use "addNodes" (NOT multiple "addNode")
+   - Use "addEdges" (NOT multiple "addEdge")
+   - Specify autoLayout: "horizontal" with spacing: 350
+
+2. NEVER use individual addNode operations in sequence - they will stack!
+
+3. Example for creating a chatbot:
+{
+  "operations": [
+    {
+      "type": "addNodes",
+      "nodes": [
+        { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+        { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+        { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+      ],
+      "autoLayout": "horizontal",
+      "spacing": 350
+    },
+    {
+      "type": "addEdges",
+      "edges": [
+        { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+        { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+      ]
+    }
+  ]
+}
+
+When users ask to modify the flow, use tweak_flow with the current flow_id (${flow_id}).
+Be helpful, concise, and proactive in suggesting improvements.`;
+
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    
+    let currentMessages = [...claudeMessages];
+    let conversationHistory: any[] = [];
+    let continueLoop = true;
+    const maxIterations = 10;
+    let iteration = 0;
+    
+    while (continueLoop && iteration < maxIterations) {
+      iteration++;
+      
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        system: systemPrompt,
+        tools: tools,
+        messages: currentMessages
+      });
+
+      conversationHistory.push({
+        role: "assistant",
+        content: response.content,
+        stop_reason: response.stop_reason
+      });
+
+      if (response.stop_reason === "end_turn") {
+        let finalText = "";
+        for (const block of response.content) {
+          if (block.type === "text") {
+            finalText += block.text;
+          }
+        }
+        console.log(`✅ Claude finished with ${finalText.length} chars`);
+        return { reply: finalText || "No response generated." };
+      }
+
+      if (response.stop_reason === "max_tokens") {
+        console.warn("⚠️ Hit max_tokens, returning accumulated text");
+        let accumulatedText = "";
+        for (const entry of conversationHistory) {
+          for (const block of entry.content) {
+            if (block.type === "text") {
+              accumulatedText += block.text + "\n\n";
+            }
+          }
+        }
+        return { reply: accumulatedText.trim() || "Response was truncated due to length." };
+      }
+
+      // Process tool uses
+      const toolResults: any[] = [];
+      let hasTools = false;
+
+      for (const block of response.content) {
+        if (block.type === "tool_use") {
+          hasTools = true;
+          const toolName = block.name;
+          const toolInput = block.input;
+          
+          console.log(`🔧 Claude wants to use tool: ${toolName}`, toolInput);
+          
+          let toolResult;
+          try {
+            switch (toolName) {
+              case "tweak_flow":
+                toolResult = await this.executeTweakFlow(toolInput);
+                console.log(`✅ tweak_flow result:`, toolResult);
+                break;
+              case "search_components":
+                toolResult = await this.executeSearchComponents(toolInput);
+                break;
+              case "get_component_details":
+                toolResult = await this.executeGetComponentDetails(toolInput);
+                break;
+              case "get_flow_details":
+                toolResult = await this.executeGetFlowDetails(toolInput);
+                break;
+              default:
+                toolResult = { error: `Unknown tool: ${toolName}` };
+            }
+          } catch (err: any) {
+            console.error(`❌ Tool execution error:`, err);
+            toolResult = { error: err.message };
+          }
+          
+          toolResults.push({
+            type: "tool_result" as const,
+            tool_use_id: block.id,
+            content: JSON.stringify(toolResult)
+          });
+        }
+      }
+
+      // If no tools were used, something went wrong
+      if (!hasTools) {
+        console.warn("⚠️ Claude stopped without tool use or end_turn");
+        let accumulatedText = "";
+        for (const entry of conversationHistory) {
+          for (const block of entry.content) {
+            if (block.type === "text") {
+              accumulatedText += block.text + "\n\n";
+            }
+          }
+        }
+        return { reply: accumulatedText.trim() || "No response generated." };
+      }
+
+      // Add assistant response and tool results to conversation
+      currentMessages.push(
+        { role: "assistant" as const, content: response.content },
+        { role: "user" as const, content: toolResults }
+      );
+    }
+
+    // If we hit max iterations, return accumulated text
+    console.warn("⚠️ Hit max iterations, returning accumulated response");
+    let accumulatedText = "";
+    for (const entry of conversationHistory) {
+      for (const block of entry.content) {
+        if (block.type === "text") {
+          accumulatedText += block.text + "\n\n";
+        }
+      }
+    }
+    return { reply: accumulatedText.trim() || "Response exceeded iteration limit." };
+  }
+
+  // Helper methods to execute tools
+  private async executeTweakFlow(input: any) {
+    const mockReq = { 
+      params: { flowId: input.flowId }, 
+      body: { 
+        flowId: input.flowId,
+        operations: input.operations,
+        validateAfter: false,
+        continueOnError: false
+      } 
+    };
+    
+    let result: any;
+    const mockRes = {
+      json: (data: any) => { result = data; },
+      status: (code: number) => ({ 
+        json: (data: any) => { 
+          result = { ...data, statusCode: code }; 
+          return mockRes;
+        } 
+      })
+    };
+    
+    await this.tweakFlow(mockReq, mockRes);
+    
+    return result || { success: false, error: "No result from tweakFlow" };
+  }
+
+  private async executeSearchComponents(input: any) {
+    const results = await this.componentService!.searchComponents(input.keyword);
+    return { results };
+  }
+
+  private async executeGetComponentDetails(input: any) {
+    const template = await this.componentService!.getComponentTemplate(input.componentName);
+    return { template };
+  }
+
+  private async executeGetFlowDetails(input: any) {
+    const flow = await this.langflowApi!.getFlow(input.flowId);
+    return { flow };
+  }
 }
 
 /**
@@ -512,4 +990,34 @@ function translateTweakFlowRequest(body: any) {
   throw new Error(
     "Missing or invalid 'operations' array. Only 'operations' is supported. Example: { flowId: 'FLOW_ID', operations: [ { type: 'updateNode', nodeId: 'openai_1', updates: { template: { temperature: 0.9 } }, merge: true } ] }"
   );
+}
+
+/**
+ * Normalizes updateNode operations by flattening nested template structures.
+ * 
+ * @param op - The operation object to normalize
+ * @returns The normalized operation object
+ */
+function normalizeUpdateNodeOperation(op: any) {
+  // If updates.data.node.template exists, flatten it to updates.template
+  if (
+    op.type === 'updateNode' &&
+    op.updates &&
+    op.updates.data &&
+    op.updates.data.node &&
+    op.updates.data.node.template
+  ) {
+    op.updates.template = {};
+    for (const [field, valueObj] of Object.entries(op.updates.data.node.template)) {
+      // If valueObj is an object with a "value" key, use that
+      if (valueObj && typeof valueObj === 'object' && 'value' in valueObj) {
+        op.updates.template[field] = valueObj.value;
+      } else {
+        op.updates.template[field] = valueObj;
+      }
+    }
+    // Remove the nested structure
+    delete op.updates.data;
+  }
+  return op;
 }

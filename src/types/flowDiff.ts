@@ -10,35 +10,68 @@ export type FlowDiffOperationType =
   | 'moveNode'
   | 'addEdge'
   | 'removeEdge'
-  | 'updateMetadata';
+  | 'updateMetadata'
+  | 'addNodes'      // Bulk add
+  | 'removeNodes'   // Bulk remove
+  | 'addEdges'      // Bulk add edges
+  | 'removeEdges'   // Bulk remove edges
+  | 'addNote';      // Add note/README
 
 export interface BaseOperation {
   type: FlowDiffOperationType;
   description?: string;
 }
 
-export interface AddNodeOperation extends BaseOperation {
+/**
+ * Adds a node using complete FlowNode structure.
+ * Use for custom components, imports, or when you need full control.
+ */
+export interface AddFullNodeOperation extends BaseOperation {
   type: 'addNode';
   node: FlowNode;
   position?: { x: number; y: number };
 }
 
+/**
+ * Adds a node using simplified schema (recommended).
+ * Automatically constructs node from component catalog.
+ */
+export interface AddSimplifiedNodeOperation extends BaseOperation {
+  type: 'addNode';
+  nodeId: string;
+  component: string;
+  params?: Record<string, any>;
+  position?: { x: number; y: number };
+}
+
+/**
+ * Union of both node addition schemas.
+ */
+export type AddNodeOperation = AddFullNodeOperation | AddSimplifiedNodeOperation;
+
 export interface RemoveNodeOperation extends BaseOperation {
   type: 'removeNode';
   nodeId: string;
-  /** If true, also removes all edges connected to this node (default: true) */
   removeConnections?: boolean;
 }
 
-export interface UpdateNodeOperation extends BaseOperation {
+export interface UpdateNodeOperation {
   type: 'updateNode';
   nodeId: string;
   updates: {
     position?: { x: number; y: number };
     template?: Record<string, any>;
     displayName?: string;
+    // Add support for nested data updates
+    data?: {
+      node?: {
+        template?: Record<string, any>;
+        [key: string]: any;
+      };
+      [key: string]: any;
+    };
+    [key: string]: any;  // Allow other properties
   };
-  /** If true, deep merges updates with existing data (default: false) */
   merge?: boolean;
 }
 
@@ -48,12 +81,34 @@ export interface MoveNodeOperation extends BaseOperation {
   position: { x: number; y: number };
 }
 
-export interface AddEdgeOperation extends BaseOperation {
+/**
+ * Adds an edge using complete FlowEdge structure.
+ * Use for imports or when you need precise handle control.
+ */
+export interface AddFullEdgeOperation extends BaseOperation {
   type: 'addEdge';
   edge: FlowEdge;
-  /** If true, validates connection compatibility (default: true) */
   validateConnection?: boolean;
 }
+
+/**
+ * Adds an edge using simplified schema (recommended).
+ * Automatically constructs handles from node metadata.
+ */
+export interface AddSimplifiedEdgeOperation extends BaseOperation {
+  type: 'addEdge';
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  targetParam?: string;
+  validateConnection?: boolean;
+}
+
+/**
+ * Union of both edge addition schemas.
+ */
+export type AddEdgeOperation = AddFullEdgeOperation | AddSimplifiedEdgeOperation;
 
 export interface RemoveEdgeOperation extends BaseOperation {
   type: 'removeEdge';
@@ -73,14 +128,84 @@ export interface UpdateMetadataOperation extends BaseOperation {
   };
 }
 
+/**
+ * Bulk add multiple nodes in a single operation.
+ * More efficient than multiple addNode operations.
+ */
+export interface AddNodesOperation extends BaseOperation {
+  type: 'addNodes';
+  nodes: Array<{
+    nodeId: string;
+    component: string;
+    params?: Record<string, any>;
+    position?: { x: number; y: number };
+  }>;
+  autoLayout?: 'horizontal' | 'vertical' | 'grid';
+  spacing?: number;
+}
+
+/**
+ * Bulk remove multiple nodes.
+ */
+export interface RemoveNodesOperation extends BaseOperation {
+  type: 'removeNodes';
+  nodeIds: string[];
+  removeConnections?: boolean;
+}
+
+/**
+ * Bulk add multiple edges.
+ */
+export interface AddEdgesOperation extends BaseOperation {
+  type: 'addEdges';
+  edges: Array<{
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+    targetParam?: string;
+  }>;
+  validateConnections?: boolean;
+}
+
+/**
+ * Bulk remove multiple edges.
+ */
+export interface RemoveEdgesOperation extends BaseOperation {
+  type: 'removeEdges';
+  edges: Array<{
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+  }>;
+}
+
+/**
+ * Adds a markdown note/README to a flow for documentation.
+ * Notes are special UI-only elements that don't connect to other nodes.
+ */
+export interface AddNoteOperation extends BaseOperation {
+  type: 'addNote';
+  noteId?: string;
+  markdown: string;
+  position?: { x: number; y: number };
+  backgroundColor?: 'neutral' | 'transparent';
+}
+
 export type FlowDiffOperation =
   | AddNodeOperation
+  | AddNoteOperation
   | RemoveNodeOperation
   | UpdateNodeOperation
   | MoveNodeOperation
   | AddEdgeOperation
   | RemoveEdgeOperation
-  | UpdateMetadataOperation;
+  | UpdateMetadataOperation
+  | AddNodesOperation
+  | RemoveNodesOperation
+  | AddEdgesOperation
+  | RemoveEdgesOperation;
 
 /**
  * Result of applying diff operations to a flow.
@@ -99,13 +224,9 @@ export interface FlowDiffResult {
  * Request to apply operations to a flow.
  */
 export interface FlowDiffRequest {
-  /** Flow UUID to modify (mutually exclusive with flow) */
   flowId?: string;
-  /** Flow object to modify (mutually exclusive with flowId) */
   flow?: any;
   operations: FlowDiffOperation[];
-  /** Validate flow after operations (default: true) */
   validateAfter?: boolean;
-  /** Continue on operation failure (default: false) */
   continueOnError?: boolean;
 }

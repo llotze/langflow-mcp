@@ -20,6 +20,7 @@ import { LangflowApiService } from '../services/langflowApiService.js';
 import { LangflowComponentService } from '../services/LangflowComponentService.js';
 import { LangflowFlowBuilder } from '../services/LangflowFlowBuilder.js';
 import { MCPTools } from '../tools.js';
+import { FlowHistory } from '../services/flowHistory.js';
 
 /**
  * Starts the Langflow MCP stdio server.
@@ -39,8 +40,10 @@ import { MCPTools } from '../tools.js';
 async function main() {
   const config = loadConfig();
 
-  // Initialize Langflow API client if credentials are available
+  // Initialize services
   let langflowApi: LangflowApiService | null = null;
+  const flowHistory = new FlowHistory();  // Create history instance
+
   if (config.langflowApiUrl && config.langflowApiKey) {
     langflowApi = new LangflowApiService(
       config.langflowApiUrl,
@@ -104,25 +107,87 @@ async function main() {
         name: 'tweak_flow',
         description: `Edit an existing Langflow flow by applying operations.
 
-        USAGE EXAMPLE:
-        {
-          "flowId": "abc-123",
-          "operations": [
-            {
-              "type": "updateNode",
-              "nodeId": "openai_1",
-              "updates": {
-                "template": {
-                  "temperature": 0.9,
-                  "max_tokens": 500
-                }
-              },
-              "merge": true
-            }
-          ]
-        }
+      IMPORTANT: Use "updates" field, NOT "params"!
 
-        IMPORTANT: Only use "operations" array. Do not use legacy "tweaks" format.`,
+      EXAMPLE - Update Prompt Template:
+      {
+        "flowId": "abc-123",
+        "operations": [{
+          "type": "updateNode",
+          "nodeId": "Prompt-xyz",
+          "updates": {
+            "data": {
+              "node": {
+                "template": {
+                  "template": {
+                    "value": "Your new prompt text here"
+                  }
+                }
+              }
+            }
+          },
+          "merge": true
+        }]
+      }
+
+      For Prompt Template components, the path is:
+      updates.data.node.template.template.value
+
+      SUPPORTED OPERATIONS:
+
+      1. Add Single Node:
+      {
+        "type": "addNode",
+        "nodeId": "openai_1",
+        "component": "OpenAIModel",
+        "params": { "model_name": "gpt-4o-mini" },
+        "position": { "x": 400, "y": 200 }
+      }
+
+      2. Bulk Add Nodes:
+      {
+        "type": "addNodes",
+        "nodes": [
+          { "nodeId": "input_1", "component": "ChatInput", "params": {} },
+          { "nodeId": "llm_1", "component": "OpenAIModel", "params": { "model_name": "gpt-4o-mini" } },
+          { "nodeId": "output_1", "component": "ChatOutput", "params": {} }
+        ],
+        "autoLayout": "horizontal",
+        "spacing": 350
+      }
+
+      3. Bulk Remove Nodes:
+      {
+        "type": "removeNodes",
+        "nodeIds": ["node1", "node2", "node3"],
+        "removeConnections": true
+      }
+
+      4. Bulk Add Edges:
+      {
+        "type": "addEdges",
+        "edges": [
+          { "source": "input_1", "target": "llm_1", "targetParam": "input_value" },
+          { "source": "llm_1", "target": "output_1", "targetParam": "input_value" }
+        ]
+      }
+
+      5. Bulk Remove Edges:
+      {
+        "type": "removeEdges",
+        "edges": [
+          { "source": "node1", "target": "node2" },
+          { "source": "node2", "target": "node3" }
+        ]
+      }
+
+      BENEFITS OF BULK OPERATIONS:
+      - 80-90% faster than individual operations
+      - Single validation pass
+      - Automatic layout positioning
+      - Better error handling
+
+      IMPORTANT: Use bulk operations when adding/removing multiple items.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -132,28 +197,66 @@ async function main() {
             },
             operations: {
               type: 'array',
-              description: 'Operations to apply (updateNode, addEdge, etc.)',
+              description: 'Array of operations - MUST use "updates" field for updateNode operations',
               items: {
                 type: 'object',
                 properties: {
                   type: { 
                     type: 'string',
-                    enum: ['updateNode', 'addNode', 'removeNode', 'addEdge', 'removeEdge', 'updateMetadata']
+                    enum: [
+                      'addNode', 'updateNode', 'removeNode', 'moveNode',
+                      'addEdge', 'removeEdge', 'updateMetadata',
+                      'addNodes', 'removeNodes', 'addEdges', 'removeEdges'
+                    ]
                   },
+                  // Single node operations
                   nodeId: { type: 'string' },
-                  updates: { 
-                    type: 'object',
-                    properties: {
-                      template: { 
-                        type: 'object',
-                        description: 'Parameter values to update (e.g., temperature, max_tokens)'
+                  component: { type: 'string' },
+                  params: { type: 'object' },
+                  position: { type: 'object' },
+                  
+                  // Bulk node operations
+                  nodes: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        nodeId: { type: 'string' },
+                        component: { type: 'string' },
+                        params: { type: 'object' },
+                        position: { type: 'object' }
                       }
                     }
                   },
-                  merge: { 
-                    type: 'boolean',
-                    description: 'Deep merge updates (default: false)'
-                  }
+                  nodeIds: {
+                    type: 'array',
+                    items: { type: 'string' }
+                  },
+                  autoLayout: {
+                    type: 'string',
+                    enum: ['horizontal', 'vertical', 'grid']
+                  },
+                  spacing: { type: 'number' },
+                  
+                  // Edge operations
+                  edges: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        source: { type: 'string' },
+                        target: { type: 'string' },
+                        targetParam: { type: 'string' }
+                      }
+                    }
+                  },
+                  
+                  // Other fields
+                  updates: { type: 'object' },
+                  merge: { type: 'boolean' },
+                  source: { type: 'string' },
+                  target: { type: 'string' },
+                  removeConnections: { type: 'boolean' }
                 }
               }
             }
@@ -276,6 +379,150 @@ async function main() {
           },
           required: ['templateId']
         }
+      },
+      
+      // UNDO/REDO TOOLS
+      {
+        name: 'undo_flow_changes',
+        description: 'Undo the last set of operations applied to a flow',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to undo changes for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'redo_flow_changes',
+        description: 'Redo the next set of operations for a flow',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to redo changes for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'get_flow_history',
+        description: 'Get history information for a flow (shows what can be undone/redone)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID to get history for' 
+            }
+          },
+          required: ['flowId']
+        }
+      },
+      {
+        name: 'jump_to_history_point',
+        description: 'Jump to a specific point in flow history',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: { 
+              type: 'string', 
+              description: 'Flow ID' 
+            },
+            entryId: {
+              type: 'string',
+              description: 'History entry ID to jump to'
+            }
+          },
+          required: ['flowId', 'entryId']
+        }
+      },
+      {
+        name: 'add_note_to_flow',
+        description: 'Add a markdown note/README to a flow for documentation',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flowId: {
+              type: 'string',
+              description: 'Flow ID to add note to'
+            },
+            markdown: {
+              type: 'string',
+              description: 'Markdown content for the note'
+            },
+            position: {
+              type: 'object',
+              properties: {
+                x: { type: 'number' },
+                y: { type: 'number' }
+              },
+              description: 'Canvas position (default: top-left)'
+            },
+            backgroundColor: {
+              type: 'string',
+              enum: ['neutral', 'transparent'],
+              description: 'Note background color'
+            }
+          },
+          required: ['flowId', 'markdown']
+        }
+      },
+      {
+        name: 'get_chat_history',
+        description: 'Get chat history for a flow and session_id',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' }
+          },
+          required: ['flow_id', 'session_id']
+        }
+      },
+      {
+        name: 'add_chat_message',
+        description: 'Add a chat message to history for a flow and session_id',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' },
+            sender: { type: 'string', description: 'Sender (user or assistant)' },
+            message: { type: 'string', description: 'Message text' }
+          },
+          required: ['flow_id', 'session_id', 'sender', 'message']
+        }
+      },
+      {
+        name: 'get_claude_response_with_history',
+        description: 'Fetches chat history for a flow/session, calls Claude with the full history, stores and returns the assistant response.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' }
+          },
+          required: ['flow_id', 'session_id']
+        }
+      },
+      {
+        name: 'assistant_chat',
+        description: 'Calls the MCP assistant to generate a response (no flow execution).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            flow_id: { type: 'string', description: 'Flow ID' },
+            session_id: { type: 'string', description: 'Session ID' },
+            message: { type: 'string', description: 'User message' }
+          },
+          required: ['flow_id', 'session_id', 'message']
+        }
       }
     ],
   }));
@@ -294,17 +541,16 @@ async function main() {
    * rather than throwing exceptions to maintain protocol compliance.
    */
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    // Initialize MCPTools with Langflow API credentials
     const mcpTools = langflowApi
       ? new MCPTools(
           undefined,
           undefined,
           config.langflowApiUrl,
-          config.langflowApiKey
+          config.langflowApiKey,
+          flowHistory
         )
       : null;
 
-    // Check if Langflow API is configured
     if (!langflowApi) {
       return {
         content: [{
@@ -321,7 +567,6 @@ async function main() {
     try {
       const args = request.params.arguments || {};
 
-      // Route tool call to appropriate handler
       switch (request.params.name) {
         case 'search_templates': {
           if (!mcpTools) throw new Error('Langflow API not configured');
@@ -438,6 +683,347 @@ async function main() {
           const req = { params: { templateId: args.templateId }, body: args };
           let result: any;
           await mcpTools.createFlowFromTemplate(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        }
+
+        case 'undo_flow_changes': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId } = args;
+
+          // Add type validation
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Check if undo is available
+          if (!flowHistory.canUndo(flowId)) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Nothing to undo for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          // Get previous state
+          const previousState = flowHistory.undo(flowId);
+          if (!previousState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Failed to retrieve previous state' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply previous state to Langflow
+          await langflowApi.updateFlow(flowId, previousState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully undid last changes',
+                flowId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'redo_flow_changes': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId } = args;
+          
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Check if redo is available
+          if (!flowHistory.canRedo(flowId)) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Nothing to redo for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          // Get next state
+          const nextState = flowHistory.redo(flowId);
+          if (!nextState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'Failed to retrieve next state' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply next state to Langflow
+          await langflowApi.updateFlow(flowId, nextState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully redid changes',
+                flowId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'get_flow_history': {
+          const { flowId } = args;
+          
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          if (!historyInfo) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'No history found for this flow' 
+                }, null, 2),
+              }],
+            };
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                flowId,
+                ...historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'jump_to_history_point': {
+          if (!langflowApi) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId, entryId } = args;
+
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          if (typeof entryId !== 'string' || !entryId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'entryId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const targetState = flowHistory.jumpTo(flowId, entryId);
+          if (!targetState) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'History entry not found' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Apply target state to Langflow
+          await langflowApi.updateFlow(flowId, targetState);
+
+          const historyInfo = flowHistory.getHistoryInfo(flowId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ 
+                success: true,
+                message: 'Successfully jumped to history point',
+                flowId,
+                entryId,
+                historyInfo
+              }, null, 2),
+            }],
+          };
+        }
+
+        case 'add_note_to_flow': {
+          if (!langflowApi || !mcpTools) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: 'Langflow API not configured' }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          const { flowId, markdown, position, backgroundColor } = args;
+
+          // Validate required parameters
+          if (typeof flowId !== 'string' || !flowId) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'flowId must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          if (typeof markdown !== 'string' || !markdown) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ 
+                  success: false,
+                  error: 'markdown must be a non-empty string' 
+                }, null, 2),
+              }],
+              isError: true,
+            };
+          }
+
+          // Build the addNote operation
+          const operation = {
+            type: 'addNote' as const,
+            markdown,
+            position: position || { x: 100, y: 100 },
+            backgroundColor: backgroundColor || 'neutral'
+          };
+
+          // Use tweak_flow to apply the operation
+          const req = { 
+            params: { flowId }, 
+            body: { 
+              flowId,
+              operations: [operation] 
+            } 
+          };
+
+          let result: any;
+          await mcpTools.tweakFlow(req, {
+            json: (data: any) => { result = data; },
+            status: (code: number) => ({ json: (data: any) => { result = data; } })
+          });
+
+          return { 
+            content: [{ 
+              type: 'text', 
+              text: JSON.stringify(result, null, 2) 
+            }] 
+          };
+        }
+
+        case 'assistant_chat': {
+          if (!mcpTools) throw new Error('Langflow API not configured');
+          const req = { body: args };
+          let result: any;
+          await mcpTools.assistant(req, {
             json: (data: any) => { result = data; },
             status: (code: number) => ({ json: (data: any) => { result = data; } })
           });

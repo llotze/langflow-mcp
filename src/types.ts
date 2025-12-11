@@ -39,8 +39,8 @@ export type FlowNode = Node<{
  * Langflow connection between nodes.
  */
 export type FlowEdge = Edge<{
-  sourceHandle: any;
-  targetHandle: any;
+  sourceHandle?: any;
+  targetHandle?: any;
 }>;
 
 /**
