@@ -24,37 +24,68 @@ export interface FlowRunResult {
 
 /**
  * LangflowApiService provides a client for interacting with the Langflow REST API.
- * 
- * Handles all HTTP communication with Langflow including:
- * - Flow CRUD operations (create, read, update, delete)
- * - Flow execution and result retrieval
- * - Import/export functionality
- * - Connection validation and error handling
- * 
- * The service automatically manages authentication headers and provides
- * consistent error formatting across all operations.
+ * Supports per-user authentication via API keys.
  */
 export class LangflowApiService {
   public client: AxiosInstance;
   public baseUrl: string;
+  private authToken?: string; // ✅ Session token (Bearer or Cookie)
 
   /**
    * Creates a new Langflow API client.
    * 
-   * @param apiUrl - Base URL of the Langflow instance (e.g., http://localhost:7860)
-   * @param apiKey - API key for authentication
+   * @param apiUrl - Base URL of the Langflow instance
+   * @param apiKey - User's API key (required for Langflow v1.5+)
    */
-  constructor(apiUrl: string, apiKey: string) {
+  constructor(apiUrl: string, apiKey?: string) {
     this.baseUrl = apiUrl.replace(/\/$/, ''); 
+    this.authToken = apiKey;
     
     this.client = axios.create({
       baseURL: this.baseUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
       timeout: 30000,
     });
+
+    // Add authentication headers to all requests
+    this.client.interceptors.request.use(
+      (config) => {
+        config.headers.set('Content-Type', 'application/json');
+
+        if (this.authToken) {
+          config.headers.set('x-api-key', this.authToken);
+        }
+
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+  }
+
+  /**
+   * Constructs auth headers from API key
+   */
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.authToken) {
+      // ✅ Langflow v1.5+ requires x-api-key header
+      headers['x-api-key'] = this.authToken;
+      console.log('🔐 Adding x-api-key header to Langflow request');
+    } else {
+      console.warn('⚠️ No API key available for Langflow request');
+    }
+
+    return headers;
+  }
+
+  /**
+   * Updates the API key for subsequent requests
+   */
+  setAuthToken(token: string): void {
+    this.authToken = token;
+    console.log('🔄 Updated Langflow API key');
   }
 
   /**
