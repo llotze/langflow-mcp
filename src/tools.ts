@@ -547,29 +547,106 @@ export class MCPTools {
     }
   }
 
-  /**
-   * Unified assistant endpoint for Langflow-AI chat panel.
-   */
-  public async assistant(req: any, res: any): Promise<void> {
+ /**
+ * Unified assistant endpoint for Langflow-AI chat panel.
+ */
+public async assistant(req: any, res: any): Promise<void> {
+  try {
+    const { flow_id, session_id, message: userMessage } = req.body;
+    
+    console.log(`🤖 Assistant endpoint called`);
+    console.log(`   Flow ID: ${flow_id}`);
+    console.log(`   Session ID: ${session_id}`);
+    console.log(`   Message: "${userMessage}"`);
+    
+    if (!userMessage || typeof userMessage !== 'string') {
+      console.error('❌ Missing or invalid message parameter');
+      res.status(400).json({ success: false, error: 'message (string) is required' });
+      return;
+    }
+
+    // ✅ Check environment variables
+    console.log(`🔧 Environment check:`);
+    console.log(`   LANGFLOW_API_URL: ${process.env.LANGFLOW_API_URL}`);
+    console.log(`   LANGFLOW_API_KEY: ${process.env.LANGFLOW_API_KEY ? '***' + process.env.LANGFLOW_API_KEY.slice(-4) : 'NOT SET'}`);
+    console.log(`   ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? '***' + process.env.ANTHROPIC_API_KEY.slice(-4) : 'NOT SET'}`);
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.error('❌ ANTHROPIC_API_KEY not configured');
+      res.status(500).json({ 
+        success: false, 
+        error: 'Anthropic API key not configured. Please set ANTHROPIC_API_KEY in Railway environment variables.' 
+      });
+      return;
+    }
+
+    // 1. Fetch existing history from Langflow
+    const historyApiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
+    console.log(`📡 Fetching chat history from: ${historyApiUrl}`);
+    
+    let historyResp;
     try {
-      const { flow_id, session_id, message: userMessage } = req.body;
+      historyResp = await fetch(historyApiUrl, {
+        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
+      });
       
-      if (!userMessage || typeof userMessage !== 'string') {
-        res.status(400).json({ success: false, error: 'message (string) is required' });
+      console.log(`📡 History Response Status: ${historyResp.status} ${historyResp.statusText}`);
+      console.log(`📡 History Response Headers:`, {
+        contentType: historyResp.headers.get('content-type'),
+        contentLength: historyResp.headers.get('content-length')
+      });
+
+      // ✅ Check if response is HTML
+      const contentType = historyResp.headers.get('content-type');
+      if (contentType && contentType.includes('text/html')) {
+        const htmlText = await historyResp.text();
+        console.error('❌ Chat history endpoint returned HTML instead of JSON');
+        console.error('📄 Response body (first 500 chars):', htmlText.substring(0, 500));
+        
+        res.status(500).json({
+          success: false,
+          error: 'Langflow chat history API returned HTML instead of JSON',
+          details: {
+            url: historyApiUrl,
+            status: historyResp.status,
+            contentType: contentType,
+            hint: 'Check if LANGFLOW_API_URL is correct and API is accessible'
+          }
+        });
         return;
       }
 
-      // 1. Fetch existing history from Langflow
-      const historyApiUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history?flow_id=${flow_id}&session_id=${session_id}`;
-      const historyResp = await fetch(historyApiUrl, {
-        headers: { "x-api-key": process.env.LANGFLOW_API_KEY || "" }
-      });
-      const historyData = await historyResp.json();
-      const historyArray: any[] = Array.isArray(historyData) ? historyData : [];
+      if (!historyResp.ok) {
+        const errorText = await historyResp.text();
+        console.error(`❌ Chat history fetch failed: ${errorText}`);
+        res.status(historyResp.status).json({
+          success: false,
+          error: `Failed to fetch chat history: ${historyResp.statusText}`,
+          details: errorText
+        });
+        return;
+      }
 
-      // 2. Add user message to history via Langflow API
-      const addMsgUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
-      await fetch(addMsgUrl, {
+    } catch (err: any) {
+      console.error('❌ Error fetching chat history:', err);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch chat history',
+        details: err.message
+      });
+      return;
+    }
+
+    const historyData = await historyResp.json();
+    const historyArray: any[] = Array.isArray(historyData) ? historyData : [];
+    console.log(`✅ Loaded ${historyArray.length} messages from history`);
+
+    // 2. Add user message to history via Langflow API
+    const addMsgUrl = `${process.env.LANGFLOW_API_URL}/api/v1/chat-history`;
+    console.log(`📡 Adding user message to history: ${addMsgUrl}`);
+    
+    try {
+      const addResp = await fetch(addMsgUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -583,25 +660,64 @@ export class MCPTools {
         })
       });
 
-      // 3. Optionally fetch flow data
-      let flow: any = null;
-      try {
-        flow = await this.langflowApi!.getFlow(flow_id);
-      } catch (err) {
-        console.warn(`Could not fetch flow ${flow_id}:`, err);
+      console.log(`📡 Add Message Response: ${addResp.status} ${addResp.statusText}`);
+      
+      const addContentType = addResp.headers.get('content-type');
+      if (addContentType && addContentType.includes('text/html')) {
+        const htmlText = await addResp.text();
+        console.error('❌ Add message endpoint returned HTML instead of JSON');
+        console.error('📄 Response body (first 500 chars):', htmlText.substring(0, 500));
+        
+        res.status(500).json({
+          success: false,
+          error: 'Langflow add message API returned HTML instead of JSON',
+          details: {
+            url: addMsgUrl,
+            status: addResp.status,
+            contentType: addContentType
+          }
+        });
+        return;
       }
 
-      // 4. Call Claude with full context
-      const { reply } = await this.runClaudeWithHistory({
-        flow_id,
-        session_id,
-        userMessage,
-        history: historyArray,
-        flow
-      });
+      if (!addResp.ok) {
+        const errorText = await addResp.text();
+        console.error(`❌ Failed to add user message: ${errorText}`);
+        // Continue anyway, we can still process the request
+      } else {
+        console.log(`✅ User message added to history`);
+      }
+    } catch (err: any) {
+      console.error('❌ Error adding user message:', err);
+      // Continue anyway
+    }
 
-      // 5. Store assistant response via Langflow API
-      await fetch(addMsgUrl, {
+    // 3. Optionally fetch flow data
+    let flow: any = null;
+    console.log(`📡 Fetching flow details for ${flow_id}...`);
+    try {
+      flow = await this.langflowApi!.getFlow(flow_id);
+      console.log(`✅ Fetched flow: ${flow.name || flow_id}`);
+    } catch (err: any) {
+      console.warn(`⚠️ Could not fetch flow ${flow_id}:`, err.message);
+      // Continue without flow data
+    }
+
+    // 4. Call Claude with full context
+    console.log(`🤖 Calling Claude with ${historyArray.length} history messages...`);
+    const { reply } = await this.runClaudeWithHistory({
+      flow_id,
+      session_id,
+      userMessage,
+      history: historyArray,
+      flow
+    });
+    console.log(`✅ Claude responded with ${reply.length} characters`);
+
+    // 5. Store assistant response via Langflow API
+    console.log(`📡 Storing assistant response...`);
+    try {
+      const storeResp = await fetch(addMsgUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -615,12 +731,28 @@ export class MCPTools {
         })
       });
 
-      res.json({ success: true, reply });
+      if (!storeResp.ok) {
+        console.error(`⚠️ Failed to store assistant response: ${storeResp.status}`);
+      } else {
+        console.log(`✅ Assistant response stored`);
+      }
     } catch (err: any) {
-      console.error("assistant endpoint error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      console.error('⚠️ Error storing assistant response:', err.message);
+      // Continue anyway, we have the reply
     }
+
+    res.json({ success: true, reply });
+    
+  } catch (err: any) {
+    console.error("❌ assistant endpoint error:", err);
+    console.error("Stack trace:", err.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message,
+      type: err.constructor.name
+    });
   }
+}
 
   /**
    * Core Claude call with optional injected history and flow.
