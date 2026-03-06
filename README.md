@@ -25,7 +25,7 @@
 
 ### **Core Capabilities**
 
--  **Graceful AI Assistant** - Claude-powered conversational interface for natural language flow building
+-  **Hopper AI Assistant** - Claude-powered conversational interface for natural language flow building
 -  **Per-User Authentication** - Each user provides their own Langflow API key (no shared credentials)
 -  **Real-Time Updates** - Server-Sent Events (SSE) for live flow synchronization
 -  **Bulk Operations** - Efficient multi-node/edge operations (80-90% faster than individual operations)
