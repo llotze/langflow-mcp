@@ -2,7 +2,6 @@
 
 **AI-powered assistant server for Langflow visual flow builder.** Implements the Model Context Protocol (MCP) to enable conversational flow building through Claude and provides HTTP/REST APIs for programmatic flow management.
 
- **Live Production Instance**: `https://langflow-mcp-production.up.railway.app`
 
 ---
 
