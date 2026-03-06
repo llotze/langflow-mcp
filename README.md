@@ -1,6 +1,6 @@
 # Langflow MCP Server
 
-**AI-powered assistant server for Langflow visual flow builder.** Implements the Model Context Protocol (MCP) to enable conversational flow building through Claude and provides HTTP/REST APIs for programmatic flow management.
+**AI-powered assistant server for Langflow visual flow builder, built for Graceful AI.** Implements the Model Context Protocol (MCP) to enable conversational flow building through Claude and provides HTTP/REST APIs for programmatic flow management.
 
 
 ---
@@ -25,7 +25,7 @@
 
 ### **Core Capabilities**
 
--  **Hopper AI Assistant** - Claude-powered conversational interface for natural language flow building
+-  **Graceful AI Assistant** - Claude-powered conversational interface for natural language flow building
 -  **Per-User Authentication** - Each user provides their own Langflow API key (no shared credentials)
 -  **Real-Time Updates** - Server-Sent Events (SSE) for live flow synchronization
 -  **Bulk Operations** - Efficient multi-node/edge operations (80-90% faster than individual operations)
